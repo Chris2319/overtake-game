@@ -1,5 +1,5 @@
 import { generateBoard, MAIN_LAYER_ID, tileAtPosition, findTile, rowColToPosition } from "./board";
-import type { Card, CardId, CardOffer, GameState, MoveResult, MoveStep, Player, PlayerId, Team, TeamId, Tile } from "./types";
+import type { Card, CardId, CardOffer, GameState, MoveResult, MoveStep, Player, PlayerId, Team, TeamId, Tile, TileId } from "./types";
 
 /** The five team color identities available today. Order also picks the
  * default team for a config that doesn't specify a color. */
@@ -26,7 +26,7 @@ export const REDRAW_THRESHOLD = 2;
 export const REDRAW_COUNT = 3;
 export const OFFER_SIZE = 5;
 /** Seconds a player has to pick before the offer auto-resolves randomly. */
-export const OFFER_TIMEOUT_SECONDS = 5;
+export const OFFER_TIMEOUT_SECONDS = 8;
 
 const FORWARD_VALUES = [1, 2, 3, 4, 5, 6];
 const COPIES_PER_VALUE = 10;
@@ -274,34 +274,48 @@ export function computeTeamAdvance(state: GameState, teamId: TeamId, amount: num
   return state.players.filter((p) => p.teamId === teamId).map((p) => computeMove(state, p.id, amount));
 }
 
+/** Every tile a "row-trap"/"column-trap" card played from `playerId`'s
+ * current tile would drop (the whole row or column except row 0, the
+ * bottom/start row, which can never be trapped) — regardless of whether
+ * anyone is actually standing on it right now. `computeRowColumnTrap` uses
+ * this to know which tiles to check for occupants; the UI also uses it
+ * directly to show every floor along the row/column giving way, not just
+ * the ones a player happens to be on. */
+export function trapCardTileIds(state: GameState, playerId: PlayerId, mode: "row" | "column"): TileId[] {
+  const player = state.players.find((p) => p.id === playerId);
+  if (!player) throw new Error(`Unknown player id: ${playerId}`);
+
+  const originTile = findTile(state.tiles, player.currentTileId);
+  return state.tiles
+    .filter((t) => t.layerId === originTile.layerId && t.row > 0)
+    .filter((t) => (mode === "row" ? t.row === originTile.row : t.col === originTile.col))
+    .map((t) => t.id);
+}
+
 /** Pure computation of a "row-trap"/"column-trap" card: every tile in the
  * mover's current row (or column) — except row 0, the bottom/start row,
- * which can never be trapped — drops straight down one row, same column,
- * exactly like stepping on a trapdoor (and can chain through a further
- * ladder/trapdoor there just the same). Anyone standing on one of those
- * tiles right now, including the mover, falls immediately; this is a
- * one-time drop, not a change to the tiles' own `effect` — a future player
- * who lands there later is unaffected. */
+ * which can never be trapped — falls straight down, same column, exactly
+ * like stepping on a trapdoor (and can chain through a further
+ * ladder/trapdoor there just the same). A "row-trap" drops one row; a
+ * "column-trap" drops all the way to row 0, the bottom of the column.
+ * Anyone standing on one of those tiles right now, including the mover,
+ * falls immediately; this is a one-time drop, not a change to the tiles'
+ * own `effect` — a future player who lands there later is unaffected. */
 export function computeRowColumnTrap(state: GameState, playerId: PlayerId, mode: "row" | "column"): MoveResult[] {
   const player = state.players.find((p) => p.id === playerId);
   if (!player) throw new Error(`Unknown player id: ${playerId}`);
 
   const originTile = findTile(state.tiles, player.currentTileId);
   const maxPosition = state.tiles.filter((t) => t.layerId === originTile.layerId).length;
-
-  const trappedTileIds = new Set(
-    state.tiles
-      .filter((t) => t.layerId === originTile.layerId && t.row > 0)
-      .filter((t) => (mode === "row" ? t.row === originTile.row : t.col === originTile.col))
-      .map((t) => t.id),
-  );
+  const trappedTileIds = new Set(trapCardTileIds(state, playerId, mode));
 
   const results: MoveResult[] = [];
   for (const p of state.players) {
     const tile = findTile(state.tiles, p.currentTileId);
     if (!trappedTileIds.has(tile.id)) continue;
 
-    const dropTile = tileAtPosition(state.tiles, tile.layerId, rowColToPosition(tile.row - 1, tile.col));
+    const dropRow = mode === "column" ? 0 : tile.row - 1;
+    const dropTile = tileAtPosition(state.tiles, tile.layerId, rowColToPosition(dropRow, tile.col));
     const { landingTile, path: chainPath } = resolveEffectChain(state, dropTile);
 
     results.push({
@@ -315,6 +329,39 @@ export function computeRowColumnTrap(state: GameState, playerId: PlayerId, mode:
   return results;
 }
 
+/** Dev-only test harness for the column-trap fall animation: teleports the
+ * current player to the top row of the board (same column they're already
+ * in, so the drop still spans the full height once the card is played) and
+ * slots a fresh "column-trap" card into the hand of both the current player
+ * and the next one in turn order — so either can immediately play it and
+ * watch the multi-row fall without waiting to draw one. Wired to a
+ * dev-mode-only button in the UI; never reachable from normal play. */
+export function setupColumnTrapDevTest(state: GameState): GameState {
+  const mover = currentPlayer(state);
+  const moverTile = findTile(state.tiles, mover.currentTileId);
+  const topRow = state.layers.find((l) => l.id === moverTile.layerId)!.rows - 1;
+  const topTile = tileAtPosition(state.tiles, moverTile.layerId, rowColToPosition(topRow, moverTile.col));
+
+  const next = state.players[(state.currentPlayerIndex + 1) % state.players.length];
+  const targetIds = new Set([mover.id, next.id]);
+
+  const players = state.players.map((p) => {
+    if (!targetIds.has(p.id)) return p;
+    const withCard = [{ id: `card-dev-${cardIdCounter++}`, type: "column-trap" as const, value: 0 }, ...p.hand.slice(1)];
+    return p.id === mover.id ? { ...p, currentTileId: topTile.id, hand: withCard } : { ...p, hand: withCard };
+  });
+
+  return { ...state, players };
+}
+
+/** Weakens every "move" card in a hand by 1 (a +5 becomes +4, a -1 becomes
+ * -2) — the effect of landing on a spiked "damage" tile. Other card types
+ * (team-advance, team-retreat, row-trap, column-trap) carry no player-facing
+ * number and are left untouched. */
+function applyDamageToHand(hand: Card[]): Card[] {
+  return hand.map((card) => (card.type === "move" ? { ...card, value: card.value - 1 } : card));
+}
+
 /** Applies an already-computed move result and advances the turn. Ability
  * tiles are exposed via the returned `abilityId` hook for callers to react
  * to (e.g. grant an extra turn) without the engine needing UI concerns. */
@@ -322,9 +369,12 @@ export function applyMoveResult(state: GameState, result: MoveResult): GameState
   const landingTile = findTile(state.tiles, result.finalTileId);
   const grantsExtraTurn =
     landingTile.effect.type === "ability" && landingTile.effect.abilityId === "extra-turn";
+  const dealsDamage = landingTile.effect.type === "damage";
 
   const players = state.players.map((p) =>
-    p.id === result.playerId ? { ...p, currentTileId: result.finalTileId } : p,
+    p.id === result.playerId
+      ? { ...p, currentTileId: result.finalTileId, hand: dealsDamage ? applyDamageToHand(p.hand) : p.hand }
+      : p,
   );
 
   const nextPlayerIndex = grantsExtraTurn
@@ -351,7 +401,13 @@ export function applyTeamAdvance(state: GameState, results: MoveResult[]): GameS
   let wins = false;
 
   for (const result of results) {
-    players = players.map((p) => (p.id === result.playerId ? { ...p, currentTileId: result.finalTileId } : p));
+    const landingTile = findTile(state.tiles, result.finalTileId);
+    const dealsDamage = landingTile.effect.type === "damage";
+    players = players.map((p) =>
+      p.id === result.playerId
+        ? { ...p, currentTileId: result.finalTileId, hand: dealsDamage ? applyDamageToHand(p.hand) : p.hand }
+        : p,
+    );
     if (result.wins) {
       winnerId = result.playerId;
       wins = true;
@@ -394,7 +450,12 @@ function finalizeCardPlay(
     const offer = drawCards(drawPile, discardPile, OFFER_SIZE);
     drawPile = offer.drawPile;
     discardPile = offer.discardPile;
-    cardOffer = { playerId, offered: offer.drawn, picksRemaining: Math.min(REDRAW_COUNT, offer.drawn.length) };
+    cardOffer = {
+      playerId,
+      offered: offer.drawn,
+      picksRemaining: Math.min(REDRAW_COUNT, offer.drawn.length),
+      deadline: Date.now() + OFFER_TIMEOUT_SECONDS * 1000,
+    };
   }
 
   return {
@@ -446,7 +507,7 @@ export function chooseOfferCard(state: GameState, cardId: CardId): GameState {
   return {
     ...state,
     players,
-    cardOffer: { ...offer, offered: remainingOffered, picksRemaining },
+    cardOffer: { ...offer, offered: remainingOffered, picksRemaining, deadline: Date.now() + OFFER_TIMEOUT_SECONDS * 1000 },
   };
 }
 

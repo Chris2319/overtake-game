@@ -26,13 +26,13 @@ const LADDERS: [from: number, to: number][] = [
 const TRAPDOOR_RUNS: { col: number; topRow: number; depth: number }[] = [
   { col: 4, topRow: 9, depth: 4 }, // deepest run: rows 9,8,7,6 -> lands on row 5
   { col: 7, topRow: 7, depth: 3 }, // rows 7,6,5 -> lands on row 4
-  { col: 1, topRow: 8, depth: 2 }, // rows 8,7 -> lands on row 6
+  { col: 2, topRow: 8, depth: 2 }, // rows 8,7 -> lands on row 6
   { col: 6, topRow: 3, depth: 1 }, // single trap door: row 3 -> row 2
-  { col: 7, topRow: 9, depth: 1 }, // single trap door: 3rd-last tile of the last row -> row 8
-  { col: 2, topRow: 9, depth: 1 }, // single trap door: 3rd-last tile of the last row -> row 8
-  { col: 2, topRow: 3, depth: 1 }, // single trap door: 3rd-last tile of the last row -> row 8
-  { col: 2, topRow: 2, depth: 1 }, // single trap door: 3rd-last tile of the last row -> row 8
-  { col: 2, topRow: 1, depth: 1 }, // single trap door: 3rd-last tile of the last row -> row 8
+  { col: 7, topRow: 9, depth: 1 }, // single trap door: row 9 -> row 8
+  { col: 2, topRow: 9, depth: 1 }, // single trap door: row 9 -> row 8
+  { col: 2, topRow: 3, depth: 1 }, // single trap door: row 3 -> row 2
+  { col: 2, topRow: 2, depth: 1 }, // single trap door: row 2 -> row 1
+  { col: 2, topRow: 1, depth: 1 }, // single trap door: row 1 -> row 0
 ];
 
 /** Ability tiles are a stub for future special-power squares. */
@@ -48,6 +48,11 @@ const ABILITY_TILES: [position: number, abilityId: string][] = [
   [17, "extra-turn"],
   [59, "extra-turn"],
 ];
+
+/** Spiked "damage" tiles: still landable, but weaken every number card in the
+ * landing player's hand by 1 (a +5 becomes +4, a -1 becomes -2). Positions
+ * listed here, one per entry. */
+const DAMAGE_TILES: number[] = [5, 23, 47, 71, 88,  89];
 
 function idForPosition(layerId: string, position: number) {
   return `${layerId}-tile-${position}`;
@@ -96,6 +101,11 @@ export function generateLayer(
   for (const [position, abilityId] of ABILITY_TILES) {
     if (!effectByPosition.has(position)) {
       effectByPosition.set(position, { type: "ability", abilityId });
+    }
+  }
+  for (const position of DAMAGE_TILES) {
+    if (!effectByPosition.has(position)) {
+      effectByPosition.set(position, { type: "damage" });
     }
   }
 

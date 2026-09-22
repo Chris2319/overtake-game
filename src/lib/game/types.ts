@@ -20,7 +20,7 @@ export interface BoardLayer {
   yOffset: number;
 }
 
-export type TileEffectType = "none" | "ladder" | "trapdoor" | "ability";
+export type TileEffectType = "none" | "ladder" | "trapdoor" | "ability" | "damage";
 
 export interface TileEffect {
   type: TileEffectType;
@@ -56,10 +56,12 @@ export type CardId = string;
  * `value` tiles at once. "team-retreat" is a two-step card: the mover picks
  * an opposing team (see the UI's target-selection overlay) before it moves
  * that team's players back by `value` tiles. "row-trap"/"column-trap" drop
- * every tile in the mover's current row/column (except the bottom row) one
- * level down, like a one-time trapdoor — anyone standing there right now,
- * including the mover, falls immediately. The type tag lets further special
- * cards slot in later without changing the hand/deck plumbing. */
+ * every tile in the mover's current row/column (except the bottom row) like
+ * a one-time trapdoor — anyone standing there right now, including the
+ * mover, falls immediately. "row-trap" drops one level down; "column-trap"
+ * falls all the way to the bottom of the column (row 0). The type tag lets
+ * further special cards slot in later without changing the hand/deck
+ * plumbing. */
 export type CardType = "move" | "team-advance" | "team-retreat" | "row-trap" | "column-trap";
 
 export interface Card {
@@ -86,6 +88,11 @@ export interface CardOffer {
   playerId: PlayerId;
   offered: Card[];
   picksRemaining: number;
+  /** Server epoch-ms timestamp the pick timer auto-resolves at. Clients
+   * derive their countdown display directly from this instead of timing
+   * their own local deadline off whenever they happen to receive the
+   * offer, which drifted out of sync with the server's actual timeout. */
+  deadline: number;
 }
 
 export interface Player {
@@ -135,3 +142,73 @@ export interface MoveResult {
   finalTileId: TileId;
   wins: boolean;
 }
+
+// --- Multiplayer / WebSocket wire types -----------------------------------
+// The server (src/app/(backend)/api/server.ts) owns the authoritative
+// GameState and card randomness; clients only send intents and render
+// whatever the server broadcasts back.
+
+/** A team's fixed 5 seats in the lobby; null = open slot. */
+export interface LobbySeat {
+  playerId: PlayerId;
+  name: string;
+}
+
+export interface LobbyTeam {
+  id: TeamId;
+  name: string;
+  color: number;
+  seats: (LobbySeat | null)[];
+}
+
+export type GamePhase = "lobby" | "playing";
+
+/** One resolved move to animate on every client before it applies `state`. */
+export interface PendingMove {
+  playerId: PlayerId;
+  path: MoveStep[];
+}
+
+/** One seat in a QA-mode game: a human-controlled player the requesting
+ * client will drive directly, on the given team. */
+export interface QaPlayerConfig {
+  name: string;
+  teamId: TeamId;
+}
+
+export type WsClientAction =
+  | { action: "create_game"; name: string }
+  | { action: "create_qa_game"; players: QaPlayerConfig[] }
+  | { action: "join_game"; gameId: string; name: string }
+  | { action: "select_seat"; teamId: TeamId; slotIndex: number }
+  | { action: "start_game" }
+  | { action: "play_card"; cardId: CardId }
+  | { action: "select_retreat_target"; teamId: TeamId }
+  | { action: "choose_offer_card"; cardId: CardId }
+  | { action: "offer_activity" }
+  /** Dev-only: sets up the column-trap fall animation test scenario (see
+   * `setupColumnTrapDevTest`). Ignored by the server outside of `next dev`. */
+  | { action: "dev_setup_column_trap_test" };
+
+export type WsServerEvent =
+  | {
+      event: "game_created" | "game_joined";
+      gameId: string;
+      playerId: PlayerId;
+      /** All player ids this client drives directly — just `[playerId]` for
+       * a normal seat, or every QA-mode seat the client set up. */
+      controlledPlayerIds: PlayerId[];
+      isHost: boolean;
+      phase: GamePhase;
+      teams: LobbyTeam[];
+      gameState: GameState | null;
+    }
+  | { event: "lobby_updated"; teams: LobbyTeam[]; hostPlayerId: PlayerId }
+  | { event: "game_started"; state: GameState }
+  | { event: "await_target"; playerId: PlayerId; card: Card }
+  | { event: "card_played"; card: Card; moves: PendingMove[]; state: GameState }
+  | { event: "offer_updated"; state: GameState }
+  | { event: "error"; message: string }
+  /** Response to `dev_setup_column_trap_test` — clients just replace their
+   * local state with this, no move animation involved. */
+  | { event: "dev_state_set"; state: GameState };

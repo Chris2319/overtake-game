@@ -3,32 +3,10 @@
 import { useEffect, useRef, useState, type ReactNode, type Ref } from "react";
 import Scene, { type SceneHandle } from "./Scene";
 import { findTile } from "@/lib/game/board";
-import {
-  applyCardPlay,
-  applyTeamAdvanceCardPlay,
-  chooseOfferCard,
-  computeMove,
-  computeRowColumnTrap,
-  computeTeamAdvance,
-  createInitialState,
-  currentPlayer,
-  OFFER_TIMEOUT_SECONDS,
-  PLAYERS_PER_TEAM,
-  resolveOfferTimeout,
-  TEAM_COLORS,
-  TEAM_COUNT,
-} from "@/lib/game/engine";
-import type { TeamConfig } from "@/lib/game/engine";
-import type { Card, CardOffer, GameState, MoveStep, PlayerId, TeamId, Tile, TileId } from "@/lib/game/types";
-
-const TEAMS: TeamConfig[] = TEAM_COLORS.slice(0, TEAM_COUNT).map((team) => ({
-  id: team.id,
-  name: team.name,
-  players: Array.from({ length: PLAYERS_PER_TEAM }, (_, i) => i + 1).map((n) => ({
-    id: `${team.id}-p${n}`,
-    name: `${team.name} ${n}`,
-  })),
-}));
+import { CELL } from "@/lib/game/geometry";
+import { currentPlayer, OFFER_TIMEOUT_SECONDS, trapCardTileIds } from "@/lib/game/engine";
+import { useWs } from "@/lib/ws";
+import type { Card, CardId, CardOffer, GameState, MoveStep, PlayerId, TeamId, Tile, TileId } from "@/lib/game/types";
 
 const CARD_WIDTH = 160;
 const CARD_HEIGHT = 250;
@@ -593,7 +571,10 @@ function TeamTargetOverlay({
  * language. */
 function OfferTimerBlocks({ progress }: { progress: number }) {
   const segments = 6;
-  const filled = Math.round(progress * segments);
+  // `floor` (not `round`) so a block only goes dark once its slice of time
+  // has fully elapsed — `round` was blanking the last block up to ~2/3 of a
+  // second before the real `OFFER_TIMEOUT_SECONDS` deadline hit zero.
+  const filled = Math.min(segments, Math.floor(progress * segments + 1e-6));
   const blockSize = 12;
   const gap = 4;
   const width = segments * blockSize + (segments - 1) * gap;
@@ -678,12 +659,6 @@ function CardOfferFan({
         }}
       >
         Pick {offer.picksRemaining} card{offer.picksRemaining === 1 ? "" : "s"}
-        {!resolving && selectedIds.length > 0 && (
-          <span style={{ color: "#ff2d95", textShadow: "0 0 8px rgba(255,45,149,0.9), 0 0 18px rgba(255,45,149,0.5)" }}>
-            {" "}
-            ({picksLeft} left)
-          </span>
-        )}
       </div>
       <div
         style={{
@@ -810,6 +785,9 @@ function ParticleBurst({ burst }: { burst: Burst }) {
  * rotate/tilt buttons. */
 const ORBIT_BUTTON_ROTATE_DEG = 18;
 const ORBIT_BUTTON_TILT_DEG = 10;
+/** World-space distance nudged per tick by the HUD's pan-up/pan-down
+ * buttons — a straight slide of the framing, not a tilt. */
+const PAN_BUTTON_STEP = CELL * 1.5;
 /** Delay before hold-to-repeat kicks in, and the interval between repeats
  * once it does — lets a single click register as one discrete step while a
  * held-down button keeps nudging the camera. */
@@ -943,15 +921,19 @@ function HudCorners({ color }: { color: string }) {
 function CameraControls({
   orbitMode,
   onOrbitBy,
+  onPanBy,
   onToggleOrbit,
 }: {
   orbitMode: boolean;
   onOrbitBy: (azimuthDeg: number, polarDeg: number) => void;
+  onPanBy: (deltaY: number) => void;
   onToggleOrbit: () => void;
 }) {
   const color = "#22e3ff";
   const cut = 16;
   const borderWidth = 1.5;
+  const panUp = useHoldRepeat(() => onPanBy(PAN_BUTTON_STEP));
+  const panDown = useHoldRepeat(() => onPanBy(-PAN_BUTTON_STEP));
   const tiltUp = useHoldRepeat(() => onOrbitBy(0, -ORBIT_BUTTON_TILT_DEG));
   const tiltDown = useHoldRepeat(() => onOrbitBy(0, ORBIT_BUTTON_TILT_DEG));
   const rotateLeft = useHoldRepeat(() => onOrbitBy(-ORBIT_BUTTON_ROTATE_DEG, 0));
@@ -985,21 +967,30 @@ function CameraControls({
         }}
       />
       <HudCorners color={color} />
+      <OrbitButton title="Pan view up" {...panUp}>
+        <svg width={16} height={16} viewBox="0 0 24 24" fill="none">
+          <path d="M5 12 L12 5 L19 12" stroke="currentColor" strokeWidth={2.4} strokeLinecap="round" strokeLinejoin="round" />
+          <path d="M5 19 L12 12 L19 19" stroke="currentColor" strokeWidth={2.4} strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      </OrbitButton>
       <OrbitButton title="Tilt camera up" {...tiltUp}>
         <svg width={16} height={16} viewBox="0 0 24 24" fill="none">
           <path d="M5 15 L12 8 L19 15" stroke="currentColor" strokeWidth={2.4} strokeLinecap="round" strokeLinejoin="round" />
         </svg>
       </OrbitButton>
       <OrbitButton title="Rotate camera left" {...rotateLeft}>
+        {/* Feather "rotate-ccw" — a well-tested arrow shape, kept clear of
+            the button's own round edge so it doesn't blend into it. */}
         <svg width={18} height={18} viewBox="0 0 24 24" fill="none">
+          <polyline points="1 4 1 10 7 10" stroke="currentColor" strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round" />
           <path
-            d="M5 12 A7 7 0 1 1 8.5 18"
+            d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"
             stroke="currentColor"
             strokeWidth={2.2}
             strokeLinecap="round"
+            strokeLinejoin="round"
             fill="none"
           />
-          <path d="M5 12 L5 17 L10 17 Z" fill="currentColor" />
         </svg>
       </OrbitButton>
       <OrbitButton
@@ -1021,15 +1012,17 @@ function CameraControls({
         </svg>
       </OrbitButton>
       <OrbitButton title="Rotate camera right" {...rotateRight}>
+        {/* Feather "rotate-cw", mirrored from "rotate-ccw" above. */}
         <svg width={18} height={18} viewBox="0 0 24 24" fill="none">
+          <polyline points="23 4 23 10 17 10" stroke="currentColor" strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round" />
           <path
-            d="M19 12 A7 7 0 1 0 15.5 18"
+            d="M20.49 15a9 9 0 1 1-2.13-9.36L23 10"
             stroke="currentColor"
             strokeWidth={2.2}
             strokeLinecap="round"
+            strokeLinejoin="round"
             fill="none"
           />
-          <path d="M19 12 L19 17 L14 17 Z" fill="currentColor" />
         </svg>
       </OrbitButton>
       <OrbitButton title="Tilt camera down" {...tiltDown}>
@@ -1037,7 +1030,118 @@ function CameraControls({
           <path d="M5 9 L12 16 L19 9" stroke="currentColor" strokeWidth={2.4} strokeLinecap="round" strokeLinejoin="round" />
         </svg>
       </OrbitButton>
+      <OrbitButton title="Pan view down" {...panDown}>
+        <svg width={16} height={16} viewBox="0 0 24 24" fill="none">
+          <path d="M5 5 L12 12 L19 5" stroke="currentColor" strokeWidth={2.4} strokeLinecap="round" strokeLinejoin="round" />
+          <path d="M5 12 L12 19 L19 12" stroke="currentColor" strokeWidth={2.4} strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      </OrbitButton>
     </div>
+  );
+}
+
+/** Top-right toggle for the browser's fullscreen mode — the same chamfered-
+ * corner HUD card frame as `CameraControls`/`TeamStatsPanel`/`TurnIndicator`,
+ * sized down to a single round glowing `OrbitButton`. Swaps between an
+ * outward "expand to corners" icon and an inward "collapse from corners"
+ * one to reflect the current state. */
+function FullscreenButton() {
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const color = "#22e3ff";
+  const cut = 16;
+  const borderWidth = 1.5;
+
+  useEffect(() => {
+    const onChange = () => setIsFullscreen(document.fullscreenElement !== null);
+    onChange();
+    document.addEventListener("fullscreenchange", onChange);
+    return () => document.removeEventListener("fullscreenchange", onChange);
+  }, []);
+
+  const toggle = () => {
+    if (document.fullscreenElement) void document.exitFullscreen();
+    else void document.documentElement.requestFullscreen();
+  };
+
+  return (
+    <div
+      style={{
+        position: "absolute",
+        // Matches the deck's own inset from the bottom-right corner: the
+        // hand bar's 24px edge padding plus its -24px/-16px anchor
+        // translate (see the deck's wrapper below), mirrored to the top-right.
+        top: 30,
+        right: 40,
+        zIndex: 20,
+        padding: "10px 8px",
+        boxShadow: "0 0 10px rgba(34, 227, 255, 0.35), inset 0 0 8px rgba(34, 227, 255, 0.15)",
+      }}
+    >
+      {/* chamfered-corner HUD frame — same clipped-corner language as the card frames */}
+      <div style={{ position: "absolute", inset: 0, clipPath: chamferClip(cut), background: color, zIndex: 0 }} />
+      <div
+        style={{
+          position: "absolute",
+          inset: borderWidth,
+          clipPath: chamferClip(cut - borderWidth),
+          background: "rgba(6, 12, 24, 0.9)",
+          zIndex: 0,
+        }}
+      />
+      <HudCorners color={color} />
+      <OrbitButton title={isFullscreen ? "Exit fullscreen" : "Enter fullscreen"} onClick={toggle}>
+        <svg width={16} height={16} viewBox="0 0 24 24" fill="none">
+          {isFullscreen ? (
+            <>
+              <path d="M9 3 L9 9 L3 9" stroke="currentColor" strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round" fill="none" />
+              <path d="M15 3 L15 9 L21 9" stroke="currentColor" strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round" fill="none" />
+              <path d="M9 21 L9 15 L3 15" stroke="currentColor" strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round" fill="none" />
+              <path d="M15 21 L15 15 L21 15" stroke="currentColor" strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round" fill="none" />
+            </>
+          ) : (
+            <>
+              <path d="M3 9 L3 3 L9 3" stroke="currentColor" strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round" fill="none" />
+              <path d="M15 3 L21 3 L21 9" stroke="currentColor" strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round" fill="none" />
+              <path d="M21 15 L21 21 L15 21" stroke="currentColor" strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round" fill="none" />
+              <path d="M9 21 L3 21 L3 15" stroke="currentColor" strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round" fill="none" />
+            </>
+          )}
+        </svg>
+      </OrbitButton>
+    </div>
+  );
+}
+
+/** Dev-only HUD button that sends `dev_setup_column_trap_test`, teleporting
+ * the current player to the top row and slotting a "column-trap" card into
+ * their (and the next player's) hand — a one-click way to set up and replay
+ * the trapdoor-fall animation without grinding through the deck for the
+ * right roll. Only rendered outside a production build; see the matching
+ * server-side `dev` guard in server.ts. */
+function DevColumnTrapTestButton({ onClick }: { onClick: () => void }) {
+  const color = "#ff2d95";
+  return (
+    <button
+      title="Dev: move current player to top row and deal a column-trap card"
+      onClick={onClick}
+      style={{
+        position: "absolute",
+        top: 30,
+        right: 96,
+        zIndex: 20,
+        padding: "8px 12px",
+        borderRadius: 6,
+        border: `1px solid ${color}`,
+        background: "rgba(255, 45, 149, 0.12)",
+        color,
+        fontSize: 11,
+        fontFamily: "monospace",
+        letterSpacing: "0.05em",
+        cursor: "pointer",
+      }}
+    >
+      TEST COLUMN TRAP
+    </button>
   );
 }
 
@@ -1226,7 +1330,9 @@ function TurnIndicator({
                   letterSpacing: "0.02em",
                 }}
               >
-                <span style={{ color, textShadow: `0 0 8px ${color}` }}>{player.name}</span>{" "}
+                <span style={{ color, textShadow: `0 0 8px ${color}` }}>
+                  {player.name}
+                </span>{" "}
                 <span style={{ opacity: 0.55, fontWeight: 600, fontSize: 13 }}>
                   ({state.teams.find((t) => t.id === player.teamId)?.name})
                 </span>
@@ -1325,11 +1431,26 @@ function DeckPile({
   );
 }
 
-export default function GameUI() {
-  // Deck shuffling is random, so the initial state can only be built on the
-  // client — building it during SSR would diverge from the client's render
-  // and trigger a hydration mismatch.
-  const [state, setState] = useState<GameState | null>(null);
+/** Who played the card that's arriving in the next `card_played` broadcast,
+ * set right before this client sends `play_card`/`select_retreat_target` so
+ * the handler for that broadcast knows to run the local hand-card-fly
+ * animation (see `consumeCard`) instead of the plain remote board-move
+ * animation every other client plays. */
+interface AwaitingPlay {
+  mover: PlayerId;
+}
+
+export default function GameUI({
+  initialState,
+  controlledPlayerIds,
+}: {
+  initialState: GameState;
+  /** All player ids this client drives — just one outside QA mode, several
+   * when one person is playing multiple seats themselves. */
+  controlledPlayerIds: PlayerId[];
+}) {
+  const { send, subscribe } = useWs();
+  const [state, setState] = useState<GameState>(initialState);
   const sceneHandleRef = useRef<SceneHandle | null>(null);
   const deckRef = useRef<HTMLDivElement | null>(null);
   const [playing, setPlaying] = useState(false);
@@ -1337,13 +1458,20 @@ export default function GameUI() {
   const [burst, setBurst] = useState<Burst | null>(null);
   const burstIdRef = useRef(0);
   const [offerProgress, setOfferProgress] = useState(1);
-  const offerDeadlineRef = useRef<number | null>(null);
   const [selectedOfferIds, setSelectedOfferIds] = useState<string[]>([]);
-  const selectedOfferIdsRef = useRef<string[]>([]);
   const [offerResolving, setOfferResolving] = useState(false);
   const offerResolvingRef = useRef(false);
   const [deckAnchor, setDeckAnchor] = useState<{ x: number; y: number } | null>(null);
   const [orbitMode, setOrbitMode] = useState(false);
+  const awaitingPlayRef = useRef<AwaitingPlay | null>(null);
+  // Every tile a just-played row/column-trap card will drop (the whole
+  // row/column, not just tiles a player happens to stand on) — computed in
+  // `handlePlayCard` while the card is still live in local state, and
+  // consumed once the resulting move animations actually start (see
+  // `consumeCard`) so every floor's door swings open together right as the
+  // fall begins rather than at card-grow time (which could be a while
+  // before the server round-trip resolves).
+  const pendingTrapTileIdsRef = useRef<string[] | null>(null);
 
   useEffect(() => {
     if (!burst) return;
@@ -1351,9 +1479,6 @@ export default function GameUI() {
     return () => clearTimeout(timer);
   }, [burst]);
 
-  useEffect(() => {
-    setState(createInitialState(TEAMS));
-  }, []);
 
   // Tracks the topmost deck card's own top-left corner on screen, so the
   // offer fan's deal-in/collapse animation can land exactly on it (see
@@ -1371,13 +1496,6 @@ export default function GameUI() {
     return () => window.removeEventListener("resize", updateAnchor);
   }, [state?.status]);
 
-  // Keeps a ref mirror of the current selection so the rAF timer loop below
-  // (whose closure is only refreshed when `state.cardOffer` changes) can
-  // read the latest picks without going stale.
-  useEffect(() => {
-    selectedOfferIdsRef.current = selectedOfferIds;
-  }, [selectedOfferIds]);
-
   // Clears selection/resolving state once there's no active offer, covering
   // both "no offer yet" and "an offer just finished resolving".
   useEffect(() => {
@@ -1389,10 +1507,11 @@ export default function GameUI() {
   }, [state?.cardOffer]);
 
   // Folds the offer fan back onto the deck (the deal-in animation played in
-  // reverse, see `.offer-collapse-card`) and, once that finishes, commits
-  // `pickedIds` into the offering player's hand. `offerResolvingRef` guards
-  // against the manual-pick effect and the timeout tick both firing.
-  const beginOfferResolution = (offerSize: number, pickedIds: string[], auto: boolean) => {
+  // reverse, see `.offer-collapse-card`) and, once that finishes, sends each
+  // pick to the server (the actual authoritative source of the resulting
+  // hand/draw pile — see `choose_offer_card` in server.ts). `offerResolvingRef`
+  // guards against the manual-pick effect and the timeout tick both firing.
+  const beginOfferResolution = (offerSize: number, pickedIds: CardId[]) => {
     if (offerResolvingRef.current) return;
     offerResolvingRef.current = true;
     setOfferResolving(true);
@@ -1404,97 +1523,81 @@ export default function GameUI() {
           id: burstIdRef.current,
           x: deckAnchor.x + CARD_WIDTH / 2,
           y: deckAnchor.y + CARD_HEIGHT / 2,
-          color: auto ? "#22e3ff" : "#fff29e",
+          color: "#fff29e",
         });
       }
     }, Math.max(0, collapseDuration - OFFER_COLLAPSE_BURST_LEAD_MS));
     setTimeout(() => {
-      setState((s) => {
-        if (!s?.cardOffer) return s;
-        let next = s;
-        for (const id of pickedIds) {
-          if (next.cardOffer?.offered.some((c) => c.id === id)) {
-            next = chooseOfferCard(next, id);
-          }
-        }
-        // Safety net in case fewer than `picksRemaining` ids came through —
-        // falls back to the engine's own random resolution rather than
-        // leaving the offer stuck open.
-        return next.cardOffer ? resolveOfferTimeout(next) : next;
-      });
+      for (const id of pickedIds) send({ action: "choose_offer_card", cardId: id });
     }, collapseDuration);
   };
 
-  // Drives the deck's countdown ring while a card offer is pending: the
-  // deadline is set once per offer (persisted in a ref so mid-offer picks
-  // don't reset it) and cleared once the offer resolves. On timeout,
-  // whatever's already selected is kept and the rest is filled randomly,
-  // then resolved through the same fold-back animation as a manual pick.
+  // Drives the deck's countdown ring while a card offer is pending — purely
+  // cosmetic on this client; the server owns the actual timeout and
+  // broadcasts whatever it resolves to via `offer_updated`. Only the
+  // offering player's own client runs this (everyone else just watches
+  // `state.cardOffer` disappear once the server resolves it). Reads the
+  // deadline straight off `state.cardOffer` (a server timestamp) rather than
+  // approximating one locally from whenever this effect happens to run —
+  // that guess drifted out of sync with the real timeout by however long
+  // this client took to notice the offer, so the deck could vanish while the
+  // countdown blocks still showed time left.
   useEffect(() => {
-    if (!state?.cardOffer) {
-      offerDeadlineRef.current = null;
-      return;
-    }
-    if (offerDeadlineRef.current === null) {
-      offerDeadlineRef.current = Date.now() + OFFER_TIMEOUT_SECONDS * 1000;
-    }
-    const deadline = offerDeadlineRef.current;
+    if (!state.cardOffer || !controlledPlayerIds.includes(state.cardOffer.playerId)) return;
+    const deadline = state.cardOffer.deadline;
     let raf: number;
     const tick = () => {
       const remaining = Math.max(0, deadline - Date.now());
       setOfferProgress(remaining / (OFFER_TIMEOUT_SECONDS * 1000));
       if (remaining <= 0) {
         setOfferProgress(0);
-        setState((s) => {
-          if (!s?.cardOffer || offerResolvingRef.current) return s;
-          const offer = s.cardOffer;
-          const picked = [...selectedOfferIdsRef.current];
-          const pool = offer.offered.filter((c) => !picked.includes(c.id));
-          while (picked.length < offer.picksRemaining && pool.length > 0) {
-            const idx = Math.floor(Math.random() * pool.length);
-            picked.push(pool.splice(idx, 1)[0].id);
-          }
-          beginOfferResolution(offer.offered.length, picked, true);
-          return s;
-        });
         return;
       }
       raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [state?.cardOffer]);
+  }, [state.cardOffer, controlledPlayerIds]);
 
   // Toggles a card's selection (glow) without committing it to the hand.
   // Once enough cards are selected to fill the offer's picks, a separate
   // effect below kicks off the fold-back/commit sequence.
   const handleToggleOfferCard = (card: Card) => {
-    if (!state?.cardOffer || offerResolvingRef.current) return;
+    if (!state.cardOffer || !controlledPlayerIds.includes(state.cardOffer.playerId) || offerResolvingRef.current) return;
     const picksRequired = state.cardOffer.picksRemaining;
     setSelectedOfferIds((prev) => {
       if (prev.includes(card.id)) return prev.filter((id) => id !== card.id);
       if (prev.length >= picksRequired) return prev;
       return [...prev, card.id];
     });
+    // Let the server know the player is still actively picking, so it pushes
+    // the offer's timeout back out instead of resolving it out from under
+    // an in-progress selection. It broadcasts the renewed `deadline` back,
+    // which is what the countdown effect above actually reads.
+    send({ action: "offer_activity" });
   };
 
   // Fires once the player has manually selected enough cards to fill the
-  // offer (the timeout path is handled separately, above).
+  // offer.
   useEffect(() => {
-    if (!state?.cardOffer || offerResolvingRef.current) return;
+    if (!state.cardOffer || !controlledPlayerIds.includes(state.cardOffer.playerId) || offerResolvingRef.current) return;
     if (selectedOfferIds.length >= state.cardOffer.picksRemaining) {
-      beginOfferResolution(state.cardOffer.offered.length, selectedOfferIds, false);
+      beginOfferResolution(state.cardOffer.offered.length, selectedOfferIds);
     }
-  }, [selectedOfferIds, state?.cardOffer]);
+  }, [selectedOfferIds, state.cardOffer, controlledPlayerIds]);
 
-  if (!state) return null;
+  const activePlayer = currentPlayer(state);
+  const isMyTurn = controlledPlayerIds.includes(activePlayer.id);
+  const myPlayer = isMyTurn
+    ? activePlayer
+    : (state.players.find((p) => controlledPlayerIds.includes(p.id)) ?? activePlayer);
 
   // Shared tail of playing any card: shrinks/fades the held card into the
   // mover's token, fires the consume burst, runs every affected player's
-  // board animation, then commits the engine-side result. `mover` is who
-  // played the card (whose token the card visually flies into and whose
-  // hand it's removed from) even when the card's effect lands on other
-  // players (e.g. a "team-retreat" target).
+  // board animation, then commits the server's authoritative state. `mover`
+  // is who played the card (whose token the card visually flies into and
+  // whose hand it's removed from) even when the card's effect lands on
+  // other players (e.g. a "team-retreat" target).
   const consumeCard = async (
     card: Card,
     mover: PlayerId,
@@ -1518,16 +1621,56 @@ export default function GameUI() {
       setBurst({ id: burstIdRef.current, x: burstPos.x, y: burstPos.y, color: cardColor(card, false) });
     }, SHRINK_MS);
 
+    // A row/column-trap card's doors were only built (shut) back in
+    // `handlePlayCard`; open the whole row/column together now, exactly as
+    // the fall it's for actually starts.
+    if (pendingTrapTileIdsRef.current) {
+      sceneHandleRef.current?.openTrapdoors(pendingTrapTileIdsRef.current);
+      pendingTrapTileIdsRef.current = null;
+    }
+
     const moveAnimations = moveAnimTargets.map((t) => sceneHandleRef.current?.animateMove(t.playerId, t.path));
     await Promise.all([...moveAnimations, sleep(SHRINK_MS)]);
 
-    setState((s) => (s ? commit(s) : s));
+    setState((s) => commit(s));
     setCardAnim(null);
     setPlaying(false);
   };
 
+  // Applies a `card_played` broadcast on a client that didn't initiate it:
+  // just runs every affected player's board-move animation (no hand-card
+  // fly-in — this client has no button/origin for a card it didn't play),
+  // then commits the server's authoritative state.
+  const applyRemoteCardPlay = async (moves: { playerId: PlayerId; path: MoveStep[] }[], nextState: GameState) => {
+    await Promise.all(moves.map((m) => sceneHandleRef.current?.animateMove(m.playerId, m.path)));
+    setState(nextState);
+  };
+
+  useEffect(
+    () =>
+      subscribe((msg) => {
+        if (msg.event === "card_played") {
+          const awaiting = awaitingPlayRef.current;
+          if (awaiting) {
+            awaitingPlayRef.current = null;
+            void consumeCard(msg.card, awaiting.mover, msg.moves, () => msg.state);
+          } else {
+            void applyRemoteCardPlay(msg.moves, msg.state);
+          }
+        } else if (msg.event === "offer_updated") {
+          setState(msg.state);
+        } else if (msg.event === "dev_state_set") {
+          setState(msg.state);
+        } else if (msg.event === "error") {
+          console.error("[game] server error:", msg.message);
+        }
+      }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [subscribe],
+  );
+
   const handlePlayCard = async (card: Card, buttonEl: HTMLButtonElement) => {
-    if (playing || state.status !== "idle" || state.cardOffer) return;
+    if (playing || state.status !== "idle" || state.cardOffer || !isMyTurn) return;
     setPlaying(true);
 
     const rect = buttonEl.getBoundingClientRect();
@@ -1538,62 +1681,41 @@ export default function GameUI() {
     // skip the animation entirely.
     requestAnimationFrame(() => setCardAnim((a) => (a ? { ...a, phase: "grow" } : a)));
 
-    const player = currentPlayer(state);
-
     if (card.type === "team-retreat") {
       // Two-step card: hold enlarged at center and wait for the mover to
       // pick a target team via the TeamTargetOverlay before it's consumed
-      // — see handleSelectRetreatTarget.
+      // — see handleSelectRetreatTarget. Tell the server the card was
+      // played now so it records pendingRetreat; select_retreat_target
+      // depends on that state existing.
       await sleep(GROW_MS);
       setCardAnim((a) => (a ? { ...a, phase: "await-target" } : a));
+      send({ action: "play_card", cardId: card.id });
       return;
     }
 
-    const isTeamAdvance = card.type === "team-advance";
-    const isRowColTrap = card.type === "row-trap" || card.type === "column-trap";
-    const multiResults = isTeamAdvance
-      ? computeTeamAdvance(state, player.teamId, card.value)
-      : isRowColTrap
-        ? computeRowColumnTrap(state, player.id, card.type === "row-trap" ? "row" : "column")
-        : null;
-    const result = multiResults ? null : computeMove(state, player.id, card.value);
-
-    if (isRowColTrap && multiResults) {
-      // Build a real (temporary) trapdoor on every tile a player is about to
-      // fall through, so the animation shows an actual door opening under
-      // them instead of just teleporting their token down a row.
-      const originTileIds = multiResults.map(
-        (r) => state.players.find((p) => p.id === r.playerId)!.currentTileId,
-      );
-      sceneHandleRef.current?.prepareTrapdoorDrop(originTileIds);
+    if (card.type === "row-trap" || card.type === "column-trap") {
+      // Build every trapdoor the whole row/column will need — not just the
+      // tiles anyone's actually standing on — so the fall reads as the
+      // entire row/column giving way. Purely visual and safe to compute
+      // locally — it's a deterministic function of the already-synced
+      // state, no card-draw randomness involved (that part stays
+      // server-authoritative). Built now (doors stay shut) but not opened
+      // until the fall animation actually starts, in `consumeCard`.
+      const tileIds = trapCardTileIds(state, activePlayer.id, card.type === "row-trap" ? "row" : "column");
+      sceneHandleRef.current?.prepareTrapdoorDrop(tileIds);
+      pendingTrapTileIdsRef.current = tileIds;
     }
 
     await sleep(GROW_MS + HOLD_MS);
-    await consumeCard(
-      card,
-      player.id,
-      multiResults ? multiResults.map((r) => ({ playerId: r.playerId, path: r.path })) : [{ playerId: player.id, path: result!.path }],
-      (s) =>
-        multiResults
-          ? applyTeamAdvanceCardPlay(s, player.id, card.id, multiResults)
-          : applyCardPlay(s, player.id, card.id, result!),
-    );
+    awaitingPlayRef.current = { mover: activePlayer.id };
+    send({ action: "play_card", cardId: card.id });
   };
 
-  const handleSelectRetreatTarget = async (teamId: TeamId) => {
+  const handleSelectRetreatTarget = (teamId: TeamId) => {
     if (!cardAnim || cardAnim.phase !== "await-target") return;
-    const card = cardAnim.card;
-    const player = currentPlayer(state);
-    const results = computeTeamAdvance(state, teamId, card.value);
-    await consumeCard(
-      card,
-      player.id,
-      results.map((r) => ({ playerId: r.playerId, path: r.path })),
-      (s) => applyTeamAdvanceCardPlay(s, player.id, card.id, results),
-    );
+    awaitingPlayRef.current = { mover: activePlayer.id };
+    send({ action: "select_retreat_target", teamId });
   };
-
-  const player = currentPlayer(state);
 
   return (
     <div
@@ -1627,9 +1749,14 @@ export default function GameUI() {
         <CameraControls
           orbitMode={orbitMode}
           onOrbitBy={(azimuthDeg, polarDeg) => sceneHandleRef.current?.orbitBy(azimuthDeg, polarDeg)}
+          onPanBy={(deltaY) => sceneHandleRef.current?.panBy(deltaY)}
           onToggleOrbit={() => sceneHandleRef.current?.setOrbitMode(!orbitMode)}
         />
-        {state.status === "finished" && <TurnIndicator state={state} player={player} />}
+        <FullscreenButton />
+        {process.env.NODE_ENV !== "production" && (
+          <DevColumnTrapTestButton onClick={() => send({ action: "dev_setup_column_trap_test" })} />
+        )}
+        {state.status === "finished" && <TurnIndicator state={state} player={activePlayer} />}
       {state.status !== "finished" && (
         <div
           style={{
@@ -1649,7 +1776,7 @@ export default function GameUI() {
           }}
         >
           <div style={{ alignSelf: "flex-end", position: "relative", transform: "translate(16px, -16px)" }}>
-            <TeamStatsPanel teams={state.teams} players={state.players} tiles={state.tiles} currentPlayerId={player.id} />
+            <TeamStatsPanel teams={state.teams} players={state.players} tiles={state.tiles} currentPlayerId={activePlayer.id} />
           </div>
           <div
             style={{
@@ -1669,11 +1796,11 @@ export default function GameUI() {
               }}
             >
               <HandBaseline />
-              {player.hand.map((card, i) => {
+              {myPlayer.hand.map((card, i) => {
                 const isAnimating = cardAnim?.card.id === card.id;
-                const locked = playing || !!state.cardOffer;
+                const locked = playing || !!state.cardOffer || !isMyTurn;
                 const color = cardColor(card, locked);
-                const mid = (player.hand.length - 1) / 2;
+                const mid = (myPlayer.hand.length - 1) / 2;
                 const offset = i - mid;
                 return (
                   <button
@@ -1718,7 +1845,7 @@ export default function GameUI() {
       {cardAnim && <CardPlayOverlay anim={cardAnim} />}
       {cardAnim?.phase === "await-target" && (
         <TeamTargetOverlay
-          teams={state.teams.filter((t) => t.id !== player.teamId)}
+          teams={state.teams.filter((t) => t.id !== activePlayer.teamId)}
           onSelect={handleSelectRetreatTarget}
         />
       )}
@@ -1730,7 +1857,7 @@ export default function GameUI() {
           anchor={deckAnchor}
           selectedIds={selectedOfferIds}
           resolving={offerResolving}
-          locked={playing}
+          locked={playing || !controlledPlayerIds.includes(state.cardOffer.playerId)}
           onToggle={handleToggleOfferCard}
         />
       )}

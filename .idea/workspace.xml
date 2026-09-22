@@ -4,8 +4,17 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="3a45f6a1-8fe9-4b10-9878-3af596d09412" name="Changes" comment="">
-      <change afterPath="$PROJECT_DIR$/public/background360.png" afterDir="false" />
+    <list default="true" id="3a45f6a1-8fe9-4b10-9878-3af596d09412" name="Changes" comment="updates">
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/package-lock.json" beforeDir="false" afterPath="$PROJECT_DIR$/package-lock.json" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/package.json" beforeDir="false" afterPath="$PROJECT_DIR$/package.json" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/app/game/GameUI.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/src/app/game/GameUI.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/app/game/Scene.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/src/app/game/Scene.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/app/layout.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/src/app/layout.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/app/page.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/src/app/page.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/lib/game/board.ts" beforeDir="false" afterPath="$PROJECT_DIR$/src/lib/game/board.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/lib/game/engine.ts" beforeDir="false" afterPath="$PROJECT_DIR$/src/lib/game/engine.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/lib/game/types.ts" beforeDir="false" afterPath="$PROJECT_DIR$/src/lib/game/types.ts" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -85,11 +94,24 @@
       <option name="presentableId" value="Default" />
       <updated>1789708971206</updated>
       <workItem from="1789708972221" duration="380000" />
-      <workItem from="1789709357100" duration="49601000" />
+      <workItem from="1789709357100" duration="68633000" />
     </task>
+    <task id="LOCAL-00001" summary="updates">
+      <option name="closed" value="true" />
+      <created>1790011113470</created>
+      <option name="number" value="00001" />
+      <option name="presentableId" value="LOCAL-00001" />
+      <option name="project" value="LOCAL" />
+      <updated>1790011113470</updated>
+    </task>
+    <option name="localTasksCounter" value="2" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
     <option name="version" value="3" />
+  </component>
+  <component name="VcsManagerConfiguration">
+    <MESSAGE value="updates" />
+    <option name="LAST_COMMIT_MESSAGE" value="updates" />
   </component>
 </project>

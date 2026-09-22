@@ -31,6 +31,15 @@ const ORBIT_BUTTON_TILT_DEG = 10;
  * the azimuth becomes undefined and the view snaps. */
 const ORBIT_MIN_POLAR_RAD = 0.05;
 const ORBIT_MAX_POLAR_RAD = Math.PI - 0.05;
+/** Time constant (ms) for easing the camera toward an `orbitBy` step instead
+ * of snapping straight there — smaller is snappier, larger is floatier. */
+const ORBIT_BUTTON_EASE_MS = 140;
+/** Below this angular distance (radians) a button-triggered orbit animation
+ * is considered settled and stops overriding the camera each frame. */
+const ORBIT_BUTTON_SETTLE_RAD = 0.0005;
+/** Below this world-space distance a button-triggered pan animation is
+ * considered settled and stops overriding the camera each frame. */
+const PAN_BUTTON_SETTLE_UNITS = 0.001;
 
 const TOKEN_RADIUS = 0.22;
 const ARROW_SIZE = 0.42;
@@ -42,6 +51,13 @@ const BOUNCE_HEIGHT = 0.35;
  * brisk. */
 const STAIR_STEP_DURATION_MS = 130;
 const STAIR_BOUNCE_HEIGHT = 0.12;
+/** A trapdoor drop (row-trap/column-trap) can plunge a player many rows in
+ * a single MoveStep — playing that at the flat `STEP_DURATION_MS` used for
+ * an ordinary one-tile hop makes the fall cover the whole distance so fast
+ * it reads as an instant teleport. Scale the fall's duration by how many
+ * rows it crosses instead, so a bigger drop takes visibly longer. */
+const FALL_DURATION_PER_ROW_MS = 90;
+const FALL_BOUNCE_HEIGHT = 0.5;
 /** Tiny press-down-and-back played by a tile itself when a player lands on
  * it — distinct from the token's own mid-hop arc. */
 const TILE_BOUNCE_DURATION_MS = 200;
@@ -261,6 +277,7 @@ const TILE_COLOR = 0x3a4250;
 const STAIR_COLOR = 0x22e3ff;
 const TRAPDOOR_COLOR = 0xff2d95;
 const ABILITY_COLOR = 0xe6ff2e;
+const DAMAGE_COLOR = 0xff5a1f;
 /** Landing-bounce bloom colors: an ordinary tile's outline flashes to one of
  * these (alternating by column, same as the old alternating tile fill did)
  * instead of just brightening its own grey — the tile stays black at rest
@@ -344,6 +361,10 @@ interface AnimationJob {
    * the remaining waypoints to hop through before the step is complete */
   waypoints: THREE.Vector3[] | null;
   waypointIndex: number;
+  /** how long the current (non-staircase) step's lerp should take; usually
+   * `STEP_DURATION_MS`, but scaled up for a multi-row trapdoor fall so the
+   * distance it covers doesn't fly by in the time of a single tile hop */
+  stepDurationMs: number;
 }
 
 interface TileBounceJob {
@@ -396,6 +417,13 @@ export interface SceneHandle {
    * swings shut again after the fall, it's torn down and the tile reverts to
    * its normal look. Tiles that are already a real trapdoor are left alone. */
   prepareTrapdoorDrop: (tileIds: string[]) => void;
+  /** Swings open every one of the given tiles' trapdoors (already built by
+   * `prepareTrapdoorDrop`, or a permanent board trapdoor) together, right as
+   * a row/column-trap card's fall begins — so the whole row/column reads as
+   * one floor giving way, not just the tile(s) a player happens to be
+   * standing on. Each door still closes and (if temporary) tears itself
+   * down on its own after the usual hold. */
+  openTrapdoors: (tileIds: string[]) => void;
   /** Switches between the scripted follow-camera and free orbit (mouse
    * drag/scroll). Entering orbit mode re-centers the orbit target on
    * wherever the follow-camera was last looking, so the view doesn't jump. */
@@ -404,6 +432,11 @@ export interface SceneHandle {
    * around the target, `polarDeg` tilts it up/down. Switches into orbit
    * mode first if it isn't already active. */
   orbitBy: (azimuthDeg: number, polarDeg: number) => void;
+  /** Slides the orbit camera and its look-at target up/down together by a
+   * fixed world-space step — a straight pan, unlike `orbitBy`'s tilt, which
+   * rotates the viewing angle instead of the framing. Switches into orbit
+   * mode first if it isn't already active. */
+  panBy: (deltaY: number) => void;
 }
 
 interface SceneProps {
@@ -557,6 +590,10 @@ export default function Scene({ state, handleRef, onOrbitModeChange }: SceneProp
       if (!orbitControls || orbitControls.enabled === enabled) return;
       orbitControls.enabled = enabled;
       if (enabled) orbitControls.target.copy(camera.position).setZ(0);
+      else {
+        orbitAnimTargetRef.current = null;
+        panAnimTargetRef.current = null;
+      }
       onOrbitModeChangeRef.current?.(enabled);
     };
     const handleOrbitToggleKey = (e: KeyboardEvent) => {
@@ -564,27 +601,54 @@ export default function Scene({ state, handleRef, onOrbitModeChange }: SceneProp
       setOrbitMode(!orbitControls.enabled);
     };
     if (orbitControls) window.addEventListener("keydown", handleOrbitToggleKey);
+    // Target spherical offset (from `orbitControls.target`) a button-driven
+    // `orbitBy` step is easing toward; consumed/animated in the render loop
+    // below instead of applied instantly, so repeated taps/holds read as a
+    // smooth sweep rather than a snap. Null when no button animation is in
+    // flight (a mouse drag just drives `orbitControls` directly).
+    const orbitAnimTargetRef = { current: null as THREE.Spherical | null };
+    // Target world-space Y a button-driven `panBy` step is easing toward,
+    // for `orbitControls.target.y` (and `camera.position.y` moves by the
+    // same delta to keep the viewing angle fixed). Same easing scheme as
+    // `orbitAnimTargetRef`, just for a straight slide instead of a tilt.
+    const panAnimTargetRef = { current: null as number | null };
+    // A manual drag should take over immediately rather than fight a
+    // leftover button-driven ease.
+    orbitControls?.addEventListener("start", () => {
+      orbitAnimTargetRef.current = null;
+      panAnimTargetRef.current = null;
+    });
+
     // Nudges the orbit camera by a fixed step (azimuth around, polar
     // up/down), entering orbit mode first if needed — used by the HUD's
-    // rotate/tilt buttons. Safe to set camera.position directly here: on the
-    // next enabled `orbitControls.update()` call it recomputes its internal
-    // spherical state from the camera's current offset from the target
-    // before applying any drag delta, so it picks this up as the new
-    // baseline instead of snapping back to a stale one.
+    // rotate/tilt buttons. Builds on the in-flight animation's target (if
+    // any) rather than the camera's current (still-easing) position, so
+    // repeated clicks/holds compound smoothly instead of jittering.
     const orbitBy = (azimuthDeg: number, polarDeg: number) => {
       if (!orbitControls) return;
       setOrbitMode(true);
-      const offset = camera.position.clone().sub(orbitControls.target);
-      const spherical = new THREE.Spherical().setFromVector3(offset);
+      const spherical =
+        orbitAnimTargetRef.current?.clone() ??
+        new THREE.Spherical().setFromVector3(camera.position.clone().sub(orbitControls.target));
       spherical.theta += THREE.MathUtils.degToRad(azimuthDeg);
       spherical.phi = THREE.MathUtils.clamp(
         spherical.phi + THREE.MathUtils.degToRad(polarDeg),
         ORBIT_MIN_POLAR_RAD,
         ORBIT_MAX_POLAR_RAD,
       );
-      offset.setFromSpherical(spherical);
-      camera.position.copy(orbitControls.target).add(offset);
-      camera.lookAt(orbitControls.target);
+      orbitAnimTargetRef.current = spherical;
+    };
+
+    // Slides the orbit camera and its target up/down together by a fixed
+    // step, entering orbit mode first if needed — used by the HUD's
+    // pan-up/pan-down buttons. Builds on the in-flight animation's target
+    // (if any), same as `orbitBy`, so repeated clicks/holds compound
+    // smoothly.
+    const panBy = (deltaY: number) => {
+      if (!orbitControls) return;
+      setOrbitMode(true);
+      const base = panAnimTargetRef.current ?? orbitControls.target.y;
+      panAnimTargetRef.current = base + deltaY;
     };
 
     // Kept dim on purpose — the tiles are meant to read as self-lit neon
@@ -612,6 +676,10 @@ export default function Scene({ state, handleRef, onOrbitModeChange }: SceneProp
 
     const arrowGeometry = createArrowGeometry();
     const abilityLabelGeometry = new THREE.PlaneGeometry(CELL * 0.5, CELL * 0.5);
+    // A single spike for a "damage" tile — several are scattered across the
+    // tile top below, standing in for the spikes cutting into a landing
+    // player's number cards.
+    const spikeGeometry = new THREE.ConeGeometry(CELL * 0.09, CELL * 0.22, 4);
     const abilityLabelTexture = createAbilityLabelTexture();
     const totalTiles = initialState.tiles.length;
     // Board row a tile sits on, used to drive the floor indicator (each row
@@ -626,7 +694,8 @@ export default function Scene({ state, handleRef, onOrbitModeChange }: SceneProp
       tileRows.set(tile.id, tile.row);
 
       const isAbility = tile.effect.type === "ability";
-      const color = isAbility ? ABILITY_COLOR : TILE_COLOR;
+      const isDamage = tile.effect.type === "damage";
+      const color = isAbility ? ABILITY_COLOR : isDamage ? DAMAGE_COLOR : TILE_COLOR;
 
       const isTrapdoor = tile.effect.type === "trapdoor";
       const tileGeometry = new THREE.BoxGeometry(CELL * 0.92, TILE_HEIGHT, CELL * 0.92);
@@ -646,7 +715,13 @@ export default function Scene({ state, handleRef, onOrbitModeChange }: SceneProp
       // color brighter, ordinary tiles pop to blue/pink alternating by
       // column even though they sit black at rest.
       mesh.userData.flashColor = new THREE.Color(
-        isAbility ? ABILITY_COLOR : tile.col % 2 === 0 ? TILE_FLASH_COLOR_A : TILE_FLASH_COLOR_B,
+        isAbility
+          ? ABILITY_COLOR
+          : isDamage
+            ? DAMAGE_COLOR
+            : tile.col % 2 === 0
+              ? TILE_FLASH_COLOR_A
+              : TILE_FLASH_COLOR_B,
       );
       scene.add(mesh);
       tileMeshes.set(tile.id, mesh);
@@ -667,6 +742,26 @@ export default function Scene({ state, handleRef, onOrbitModeChange }: SceneProp
         label.position.set(0, TILE_HEIGHT / 2 + 0.015, 0);
         label.rotateX(-Math.PI / 2);
         mesh.add(label);
+      }
+
+      // A small cluster of spikes on a "damage" tile — still landable, but
+      // the spikes read at a glance as "this will hurt your hand". Built in
+      // the same frosted-glass/neon-outline style as the rest of the board
+      // (see createGlassMesh) rather than a flat emissive solid, so they
+      // read as part of the same material language instead of a bolt-on.
+      if (isDamage) {
+        const offsets: [number, number][] = [
+          [-0.22, -0.22],
+          [0.22, -0.22],
+          [0, 0],
+          [-0.22, 0.22],
+          [0.22, 0.22],
+        ];
+        for (const [ox, oz] of offsets) {
+          const spike = createGlassMesh(spikeGeometry, DAMAGE_COLOR, false, true);
+          spike.position.set(ox * CELL, TILE_HEIGHT / 2 + (CELL * 0.22) / 2, oz * CELL);
+          mesh.add(spike);
+        }
       }
 
       if (isTrapdoor) {
@@ -703,8 +798,10 @@ export default function Scene({ state, handleRef, onOrbitModeChange }: SceneProp
       // (left/right) this tile leads — every row-end just keeps pointing the
       // way that row runs, since the snake turn is obvious from the layout.
       // Skipped for trapdoors: there's no solid tile top for it to sit on,
-      // and it would float oddly above the hole once the doors open.
-      if (!isTrapdoor && tile.position < totalTiles) {
+      // and it would float oddly above the hole once the doors open. Also
+      // skipped for damage tiles: the spike cluster is already the tile's
+      // read-at-a-glance cue, and the arrow only cluttered it.
+      if (!isTrapdoor && !isDamage && tile.position < totalTiles) {
         const arrow = new THREE.Mesh(
           arrowGeometry,
           new THREE.MeshStandardMaterial({
@@ -876,6 +973,20 @@ export default function Scene({ state, handleRef, onOrbitModeChange }: SceneProp
       // is still airborne on the way in rather than snapping open only
       // after it lands (and has already started falling through).
       if (step && trapdoorState.has(step.tileId)) triggerTrapdoorOpen(step.tileId);
+      // A "trapdoor" step is a fall that *originates* from a trapdoor —
+      // open the door under the player's feet as the fall begins, and
+      // stretch the fall's duration by how many rows it drops so a
+      // column-trap plunging to the bottom floor doesn't cover that whole
+      // distance in the time of an ordinary one-tile hop.
+      if (step?.cause === "trapdoor") {
+        triggerTrapdoorOpen(job.prevTileId);
+        const fromRow = tileRows.get(job.prevTileId);
+        const toRow = tileRows.get(step.tileId);
+        const rowSpan = fromRow !== undefined && toRow !== undefined ? Math.abs(fromRow - toRow) : 1;
+        job.stepDurationMs = Math.max(STEP_DURATION_MS, rowSpan * FALL_DURATION_PER_ROW_MS);
+      } else {
+        job.stepDurationMs = STEP_DURATION_MS;
+      }
     };
     const triggerTileBounce = (tileId: string) => {
       const existing = tileBounceJobs.find((j) => j.tileId === tileId);
@@ -984,6 +1095,7 @@ export default function Scene({ state, handleRef, onOrbitModeChange }: SceneProp
             cleanY: mesh.position.y,
             waypoints: null,
             waypointIndex: 0,
+            stepDurationMs: STEP_DURATION_MS,
           };
           prepareStep(job);
           activeJobs.push(job);
@@ -1019,8 +1131,12 @@ export default function Scene({ state, handleRef, onOrbitModeChange }: SceneProp
       prepareTrapdoorDrop: (tileIds) => {
         for (const tileId of tileIds) prepareTemporaryTrapdoor(tileId);
       },
+      openTrapdoors: (tileIds) => {
+        for (const tileId of tileIds) triggerTrapdoorOpen(tileId);
+      },
       setOrbitMode,
       orbitBy,
+      panBy,
     };
 
     let frameId: number;
@@ -1073,7 +1189,7 @@ export default function Scene({ state, handleRef, onOrbitModeChange }: SceneProp
         }
 
         job.elapsed += dt;
-        const t = Math.min(job.elapsed / STEP_DURATION_MS, 1);
+        const t = Math.min(job.elapsed / job.stepDurationMs, 1);
         const targetBase = tileWorldPositions.get(step.tileId);
         if (targetBase) {
           const playerIndex = stateRef.current.players.findIndex((p) => p.id === job.playerId);
@@ -1086,12 +1202,12 @@ export default function Scene({ state, handleRef, onOrbitModeChange }: SceneProp
           faceDirection(mesh, target.x - job.fromPos.x, target.z - job.fromPos.z);
           job.cleanY = THREE.MathUtils.lerp(job.fromPos.y, target.y, t);
           mesh.position.lerpVectors(job.fromPos, target, t);
-          mesh.position.y += Math.sin(t * Math.PI) * BOUNCE_HEIGHT;
+          const bounceHeight = step.cause === "trapdoor" ? FALL_BOUNCE_HEIGHT : BOUNCE_HEIGHT;
+          mesh.position.y += Math.sin(t * Math.PI) * bounceHeight;
 
           if (t >= 1) {
             mesh.position.copy(target);
             triggerTileBounce(step.tileId);
-            if (step.cause === "trapdoor") triggerTrapdoorOpen(job.prevTileId);
             job.stepIndex += 1;
             job.elapsed = 0;
             job.fromPos = target.clone();
@@ -1189,8 +1305,44 @@ export default function Scene({ state, handleRef, onOrbitModeChange }: SceneProp
 
       if (orbitControls?.enabled) {
         // Debug mode: let the developer freely orbit instead of scripting
-        // the camera.
+        // the camera. Handles mouse-drag damping.
         orbitControls.update();
+
+        // Ease toward any pending button-driven `orbitBy` step on top of
+        // that, so it reads as a smooth sweep instead of snapping there in
+        // one frame.
+        const target = orbitAnimTargetRef.current;
+        if (target) {
+          const offset = camera.position.clone().sub(orbitControls.target);
+          const current = new THREE.Spherical().setFromVector3(offset);
+          const t = 1 - Math.exp(-dt / ORBIT_BUTTON_EASE_MS);
+          current.theta = THREE.MathUtils.lerp(current.theta, target.theta, t);
+          current.phi = THREE.MathUtils.lerp(current.phi, target.phi, t);
+          current.radius = target.radius;
+          offset.setFromSpherical(current);
+          camera.position.copy(orbitControls.target).add(offset);
+          camera.lookAt(orbitControls.target);
+          if (
+            Math.abs(current.theta - target.theta) < ORBIT_BUTTON_SETTLE_RAD &&
+            Math.abs(current.phi - target.phi) < ORBIT_BUTTON_SETTLE_RAD
+          ) {
+            orbitAnimTargetRef.current = null;
+          }
+        }
+
+        // Ease toward any pending button-driven `panBy` step — a straight
+        // vertical slide of both the camera and its target, so the viewing
+        // angle stays fixed while the framing moves.
+        const panTargetY = panAnimTargetRef.current;
+        if (panTargetY !== null) {
+          const t = 1 - Math.exp(-dt / ORBIT_BUTTON_EASE_MS);
+          const newY = THREE.MathUtils.lerp(orbitControls.target.y, panTargetY, t);
+          camera.position.y += newY - orbitControls.target.y;
+          orbitControls.target.y = newY;
+          if (Math.abs(panTargetY - newY) < PAN_BUTTON_SETTLE_UNITS) {
+            panAnimTargetRef.current = null;
+          }
+        }
       } else {
         // Follow the actively moving player, or whoever's turn it is when
         // idle. Uses the job's linear cleanY (or the player's resting tile)
