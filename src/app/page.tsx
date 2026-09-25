@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useGameSession } from "@/lib/gameSession";
 import { TEAM_COLORS } from "@/lib/game/engine";
@@ -59,8 +59,23 @@ export default function Home() {
   const updateQaPlayer = (index: number, patch: Partial<QaPlayerConfig>) =>
     setQaPlayers((prev) => prev.map((p, i) => (i === index ? { ...p, ...patch } : p)));
 
+  // Dev/scripting convenience: `?autocreate=1&name=Alice[&gameId=CODE]` opens
+  // straight into a hosted game with no clicks — see launcher script under
+  // scripts/. Query string carries over into the /game/[id] route so its own
+  // autoseat/autostart flags (if present) still apply once we navigate.
+  const autoCreateFiredRef = useRef(false);
   useEffect(() => {
-    if (gameId) router.push(`/game/${gameId}`);
+    if (autoCreateFiredRef.current || !connected) return;
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("autocreate") !== "1") return;
+    const autoName = params.get("name");
+    if (!autoName) return;
+    autoCreateFiredRef.current = true;
+    createGame(autoName, params.get("gameId") ?? undefined);
+  }, [connected, createGame]);
+
+  useEffect(() => {
+    if (gameId) router.push(`/game/${gameId}${window.location.search}`);
   }, [gameId, router]);
 
   return (
@@ -79,7 +94,7 @@ export default function Home() {
     >
       <div style={panelStyle}>
         <h1 style={{ margin: 0, fontSize: 22, color: "#22e3ff", textShadow: "0 0 10px rgba(34,227,255,0.6)" }}>
-          Chutes &amp; Ladders 3D
+          Overtake
         </h1>
         <input
           id="landing-player-name"

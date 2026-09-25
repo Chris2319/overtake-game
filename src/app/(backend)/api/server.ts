@@ -6,6 +6,7 @@ import {
   applyCardPlay,
   applyTeamAdvanceCardPlay,
   chooseOfferCard,
+  computeFreezeCardPlay,
   computeMove,
   computeRowColumnTrap,
   computeTeamAdvance,
@@ -194,9 +195,21 @@ function executeCardPlay(room: Room, player: Player, card: Card) {
     const moves = results.map((r) => ({ playerId: r.playerId, path: r.path }));
     finalizeCardPlay(room, card, moves, applyTeamAdvanceCardPlay(state, player.id, card.id, results));
   } else if (card.type === "row-trap" || card.type === "column-trap") {
-    const results = computeRowColumnTrap(state, player.id, card.type === "row-trap" ? "row" : "column");
+    const { results, destroyedFrozenTileIds } = computeRowColumnTrap(
+      state,
+      player.id,
+      card.type === "row-trap" ? "row" : "column",
+    );
     const moves = results.map((r) => ({ playerId: r.playerId, path: r.path }));
-    finalizeCardPlay(room, card, moves, applyTeamAdvanceCardPlay(state, player.id, card.id, results));
+    finalizeCardPlay(
+      room,
+      card,
+      moves,
+      applyTeamAdvanceCardPlay(state, player.id, card.id, results, destroyedFrozenTileIds),
+    );
+  } else if (card.type === "freeze") {
+    const result = computeFreezeCardPlay(state, player.id);
+    finalizeCardPlay(room, card, [{ playerId: player.id, path: result.path }], applyCardPlay(state, player.id, card.id, result));
   } else {
     const result = computeMove(state, player.id, card.value);
     finalizeCardPlay(room, card, [{ playerId: player.id, path: result.path }], applyCardPlay(state, player.id, card.id, result));
@@ -230,7 +243,12 @@ app.prepare().then(() => {
       }
 
       if (msg.action === "create_game") {
-        const gameId = generateGameId();
+        const requestedGameId = normalizeGameId(msg.gameId);
+        if (requestedGameId && rooms.has(requestedGameId)) {
+          send(ws, { event: "error", message: `Game ${requestedGameId} already exists` });
+          return;
+        }
+        const gameId = requestedGameId || generateGameId();
         const room = createRoom(gameId);
         rooms.set(gameId, room);
         const playerId = nextPlayerId(room);

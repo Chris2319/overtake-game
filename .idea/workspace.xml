@@ -5,13 +5,15 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="3a45f6a1-8fe9-4b10-9878-3af596d09412" name="Changes" comment="updates">
-      <change afterPath="$PROJECT_DIR$/src/app/(backend)/api/server.ts" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/src/app/game/LobbySeatGrid.tsx" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/src/app/game/[id]/page.tsx" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/src/lib/gameSession.tsx" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/src/lib/ws.tsx" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/test-qa.mjs" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/test-retreat.mjs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/app/(backend)/api/server.ts" beforeDir="false" afterPath="$PROJECT_DIR$/src/app/(backend)/api/server.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/app/game/GameUI.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/src/app/game/GameUI.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/app/game/Scene.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/src/app/game/Scene.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/app/game/[id]/page.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/src/app/game/[id]/page.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/app/page.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/src/app/page.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/lib/game/engine.ts" beforeDir="false" afterPath="$PROJECT_DIR$/src/lib/game/engine.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/lib/game/types.ts" beforeDir="false" afterPath="$PROJECT_DIR$/src/lib/game/types.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/lib/gameSession.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/src/lib/gameSession.tsx" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -32,30 +34,30 @@
     <option name="hideEmptyMiddlePackages" value="true" />
     <option name="showLibraryContents" value="true" />
   </component>
-  <component name="PropertiesComponent"><![CDATA[{
-  "keyToString": {
-    "ModuleVcsDetector.initialDetectionPerformed": "true",
-    "RunOnceActivity.ShowReadmeOnStart": "true",
-    "RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252": "true",
-    "RunOnceActivity.git.unshallow": "true",
-    "com.intellij.ml.llm.matterhorn.ej.ui.settings.DefaultAutoModeForALLUsers.v1": "true",
-    "com.intellij.ml.llm.matterhorn.ej.ui.settings.DefaultModelSelectionForGA.v1": "true",
-    "git-widget-placeholder": "master",
-    "js.debugger.nextJs.config.created.client": "true",
-    "js.debugger.nextJs.config.created.server": "true",
-    "junie.onboarding.icon.badge.shown": "true",
-    "last_opened_file_path": "/Users/chrisschutte/WebstormProjects/threejs/public",
-    "node.js.detected.package.eslint": "true",
-    "node.js.detected.package.tslint": "true",
-    "node.js.selected.package.eslint": "(autodetect)",
-    "node.js.selected.package.tslint": "(autodetect)",
-    "nodejs_package_manager_path": "npm",
-    "npm.Next.js: server-side.executor": "Run",
-    "to.speed.mode.migration.done": "true",
-    "ts.external.directory.path": "/Users/chrisschutte/WebstormProjects/threejs/node_modules/typescript/lib",
-    "vue.rearranger.settings.migration": "true"
+  <component name="PropertiesComponent">{
+  &quot;keyToString&quot;: {
+    &quot;ModuleVcsDetector.initialDetectionPerformed&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.git.unshallow&quot;: &quot;true&quot;,
+    &quot;com.intellij.ml.llm.matterhorn.ej.ui.settings.DefaultAutoModeForALLUsers.v1&quot;: &quot;true&quot;,
+    &quot;com.intellij.ml.llm.matterhorn.ej.ui.settings.DefaultModelSelectionForGA.v1&quot;: &quot;true&quot;,
+    &quot;git-widget-placeholder&quot;: &quot;master&quot;,
+    &quot;js.debugger.nextJs.config.created.client&quot;: &quot;true&quot;,
+    &quot;js.debugger.nextJs.config.created.server&quot;: &quot;true&quot;,
+    &quot;junie.onboarding.icon.badge.shown&quot;: &quot;true&quot;,
+    &quot;last_opened_file_path&quot;: &quot;/Users/chrisschutte/WebstormProjects/threejs/public&quot;,
+    &quot;node.js.detected.package.eslint&quot;: &quot;true&quot;,
+    &quot;node.js.detected.package.tslint&quot;: &quot;true&quot;,
+    &quot;node.js.selected.package.eslint&quot;: &quot;(autodetect)&quot;,
+    &quot;node.js.selected.package.tslint&quot;: &quot;(autodetect)&quot;,
+    &quot;nodejs_package_manager_path&quot;: &quot;npm&quot;,
+    &quot;npm.Next.js: server-side.executor&quot;: &quot;Run&quot;,
+    &quot;to.speed.mode.migration.done&quot;: &quot;true&quot;,
+    &quot;ts.external.directory.path&quot;: &quot;/Users/chrisschutte/WebstormProjects/threejs/node_modules/typescript/lib&quot;,
+    &quot;vue.rearranger.settings.migration&quot;: &quot;true&quot;
   }
-}]]></component>
+}</component>
   <component name="RecentsManager">
     <key name="CopyFile.RECENT_KEYS">
       <recent name="$PROJECT_DIR$/public" />
@@ -91,7 +93,7 @@
       <option name="presentableId" value="Default" />
       <updated>1789708971206</updated>
       <workItem from="1789708972221" duration="380000" />
-      <workItem from="1789709357100" duration="69129000" />
+      <workItem from="1789709357100" duration="72761000" />
     </task>
     <task id="LOCAL-00001" summary="updates">
       <option name="closed" value="true" />
@@ -109,7 +111,15 @@
       <option name="project" value="LOCAL" />
       <updated>1790071519384</updated>
     </task>
-    <option name="localTasksCounter" value="3" />
+    <task id="LOCAL-00003" summary="updates">
+      <option name="closed" value="true" />
+      <created>1790071535693</created>
+      <option name="number" value="00003" />
+      <option name="presentableId" value="LOCAL-00003" />
+      <option name="project" value="LOCAL" />
+      <updated>1790071535693</updated>
+    </task>
+    <option name="localTasksCounter" value="4" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">

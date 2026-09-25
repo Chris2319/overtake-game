@@ -20,7 +20,7 @@ interface SessionState {
 
 interface SessionContextValue extends SessionState {
   connected: boolean;
-  createGame: (name: string) => void;
+  createGame: (name: string, gameId?: string) => void;
   startQaGame: (players: QaPlayerConfig[]) => void;
   joinGame: (gameId: string, name: string) => void;
   selectSeat: (teamId: TeamId, slotIndex: number) => void;
@@ -71,7 +71,10 @@ export function GameSessionProvider({ children }: { children: ReactNode }) {
     [subscribe],
   );
 
-  const createGame = useCallback((name: string) => send({ action: "create_game", name }), [send]);
+  const createGame = useCallback(
+    (name: string, gameId?: string) => send({ action: "create_game", name, gameId }),
+    [send],
+  );
   const startQaGame = useCallback(
     (players: QaPlayerConfig[]) => send({ action: "create_qa_game", players }),
     [send],

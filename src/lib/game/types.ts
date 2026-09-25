@@ -59,10 +59,12 @@ export type CardId = string;
  * every tile in the mover's current row/column (except the bottom row) like
  * a one-time trapdoor — anyone standing there right now, including the
  * mover, falls immediately. "row-trap" drops one level down; "column-trap"
- * falls all the way to the bottom of the column (row 0). The type tag lets
- * further special cards slot in later without changing the hand/deck
- * plumbing. */
-export type CardType = "move" | "team-advance" | "team-retreat" | "row-trap" | "column-trap";
+ * falls all the way to the bottom of the column (row 0). "freeze" advances
+ * the mover 1 tile and turns the tile they just left into a standing frozen
+ * hazard for the rest of the game — whoever later lands exactly on it loses
+ * their next turn (see `GameState.frozenTiles`). The type tag lets further
+ * special cards slot in later without changing the hand/deck plumbing. */
+export type CardType = "move" | "team-advance" | "team-retreat" | "row-trap" | "column-trap" | "freeze";
 
 export interface Card {
   id: CardId;
@@ -105,6 +107,16 @@ export interface Player {
   currentTileId: TileId;
   abilities: AbilityId[];
   hand: Card[];
+  /** Tile this player is currently stuck on after landing on a frozen
+   * hazard, from the moment they land until they finally move off it again
+   * (see `frozenSkipPending` and `GameState.frozenTiles`). Null the rest of
+   * the time. */
+  frozenTileId: TileId | null;
+  /** True while this player still owes the "lose your next turn" penalty
+   * for `frozenTileId` — cleared (without unfreezing the tile) the moment
+   * their turn comes up and is skipped, so the *following* turn is the one
+   * where they actually get to move off it. */
+  frozenSkipPending: boolean;
 }
 
 export type GameStatus = "idle" | "moving" | "finished";
@@ -126,6 +138,12 @@ export interface GameState {
   /** Non-null while a player is choosing (or auto-resolving) their redraw
    * from a fanned-out offer instead of drawing blind. */
   cardOffer: CardOffer | null;
+  /** Tiles currently acting as a frozen hazard: whoever lands exactly on one
+   * loses their next turn. A tile enters this list the first time a player
+   * lands on its "freeze" effect (which also bumps that player forward 1
+   * extra tile); it leaves the list once the stuck player finally moves off
+   * it again, or if a row/column-trap card destroys it first. */
+  frozenTiles: TileId[];
 }
 
 /** A single hop in an animated move: land on `tileId`, optionally via a
@@ -141,6 +159,13 @@ export interface MoveResult {
   path: MoveStep[];
   finalTileId: TileId;
   wins: boolean;
+  /** Freeze tiles triggered for the first time by this move — landed on
+   * exactly, granting the mover a bonus step and turning the tile itself
+   * into a frozen hazard (see `GameState.frozenTiles`). */
+  newlyFrozenTileIds: TileId[];
+  /** Set when this move's final tile is an already-frozen hazard — the
+   * mover gets stuck there and owes a skipped turn. */
+  stuckTileId: TileId | null;
 }
 
 // --- Multiplayer / WebSocket wire types -----------------------------------
@@ -177,7 +202,15 @@ export interface QaPlayerConfig {
 }
 
 export type WsClientAction =
-  | { action: "create_game"; name: string }
+  | {
+      action: "create_game";
+      name: string;
+      /** Dev/scripting convenience: request a specific game code instead of a
+       * random one, so a launcher script can build every player's join URL
+       * up front without having to observe the host's browser. Ignored if
+       * already taken. */
+      gameId?: string;
+    }
   | { action: "create_qa_game"; players: QaPlayerConfig[] }
   | { action: "join_game"; gameId: string; name: string }
   | { action: "select_seat"; teamId: TeamId; slotIndex: number }

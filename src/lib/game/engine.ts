@@ -53,6 +53,12 @@ const TEAM_RETREAT_COPIES = 4;
 const ROW_TRAP_COPIES = 2;
 const COLUMN_TRAP_COPIES = 2;
 
+/** How many tiles a "freeze" card advances the mover — the tile they leave
+ * behind becomes a standing frozen hazard (see `computeFreezeCardPlay`). */
+const FREEZE_VALUE = 1;
+/** As rare as a team-advance/team-retreat card. */
+const FREEZE_COPIES = 4;
+
 export interface PlayerConfig {
   id: PlayerId;
   name: string;
@@ -104,6 +110,9 @@ function createDeck(): Card[] {
   }
   for (let i = 0; i < COLUMN_TRAP_COPIES; i++) {
     deck.push({ id: `card-${cardIdCounter++}`, type: "column-trap", value: 0 });
+  }
+  for (let i = 0; i < FREEZE_COPIES; i++) {
+    deck.push({ id: `card-${cardIdCounter++}`, type: "freeze", value: FREEZE_VALUE });
   }
   return shuffle(deck);
 }
@@ -159,6 +168,8 @@ export function createInitialState(teamConfigs: TeamConfig[]): GameState {
         currentTileId: startTile.id,
         abilities: [],
         hand: dealt.drawn,
+        frozenTileId: null,
+        frozenSkipPending: false,
       };
     });
   });
@@ -189,6 +200,7 @@ export function createInitialState(teamConfigs: TeamConfig[]): GameState {
     lastPlayedCard: null,
     winnerId: null,
     cardOffer: null,
+    frozenTiles: [],
   };
 }
 
@@ -196,26 +208,55 @@ export function currentPlayer(state: GameState): Player {
   return state.players[state.currentPlayerIndex];
 }
 
+interface EffectChainResult {
+  landingTile: Tile;
+  path: MoveStep[];
+  /** Set (and the chain stops there) if the chain's landing tile is already
+   * a frozen hazard (see `GameState.frozenTiles`) — the mover gets stuck
+   * instead of chaining further. */
+  stuckTileId: TileId | null;
+}
+
 /** Walks the ladder/trapdoor chain starting at `startTile` itself (not just
  * its eventual target) — so a tile arrived at from elsewhere (a dice
  * landing, or an ad-hoc drop like `computeRowColumnTrap`) still falls/climbs
- * through however many effects it chains into. `visited` guards against a
+ * through however many effects it chains into. `frozenTiles` is the current
+ * set of already-active frozen hazards (planted by a played "freeze" card —
+ * see `computeFreezeCardPlay`); landing on one of those stops the chain dead
+ * (the mover is stuck, not bounced further). `visited` guards against a
  * cycle looping forever. */
-function resolveEffectChain(state: GameState, startTile: Tile): { landingTile: Tile; path: MoveStep[] } {
+function resolveEffectChain(
+  state: GameState,
+  startTile: Tile,
+  frozenTiles: ReadonlySet<TileId>,
+): EffectChainResult {
   const path: MoveStep[] = [];
   let landingTile = startTile;
+  let stuckTileId: TileId | null = null;
   const visited = new Set<string>();
-  while (
-    (landingTile.effect.type === "ladder" || landingTile.effect.type === "trapdoor") &&
-    landingTile.effect.targetTileId &&
-    !visited.has(landingTile.id)
-  ) {
+
+  while (!visited.has(landingTile.id)) {
     visited.add(landingTile.id);
-    const cause = landingTile.effect.type;
-    landingTile = findTile(state.tiles, landingTile.effect.targetTileId);
-    path.push({ tileId: landingTile.id, cause });
+
+    if (frozenTiles.has(landingTile.id)) {
+      stuckTileId = landingTile.id;
+      break;
+    }
+
+    if (
+      (landingTile.effect.type === "ladder" || landingTile.effect.type === "trapdoor") &&
+      landingTile.effect.targetTileId
+    ) {
+      const cause = landingTile.effect.type;
+      landingTile = findTile(state.tiles, landingTile.effect.targetTileId);
+      path.push({ tileId: landingTile.id, cause });
+      continue;
+    }
+
+    break;
   }
-  return { landingTile, path };
+
+  return { landingTile, path, stuckTileId };
 }
 
 /** Pure computation of where a roll takes a player, including any chained
@@ -253,7 +294,11 @@ export function computeMove(state: GameState, playerId: PlayerId, roll: number):
   }
 
   const initialLandingTile = tileAtPosition(state.tiles, startTile.layerId, targetPosition);
-  const { landingTile, path: chainPath } = resolveEffectChain(state, initialLandingTile);
+  const { landingTile, path: chainPath, stuckTileId } = resolveEffectChain(
+    state,
+    initialLandingTile,
+    new Set(state.frozenTiles),
+  );
   path.push(...chainPath);
 
   const wins = landingTile.position === maxPosition;
@@ -263,6 +308,46 @@ export function computeMove(state: GameState, playerId: PlayerId, roll: number):
     path,
     finalTileId: landingTile.id,
     wins,
+    newlyFrozenTileIds: [],
+    stuckTileId,
+  };
+}
+
+/** Pure computation of a "freeze" card play: the mover advances `FREEZE_VALUE`
+ * tile(s) forward (chaining through any further ladder/trapdoor/hazard the
+ * bonus step lands on, same as an ordinary move), and the tile they started
+ * this play on — the one now "behind" them — becomes a standing frozen
+ * hazard added to `GameState.frozenTiles` once applied. If the mover has
+ * nowhere left to advance to (already on the final tile), only the freeze
+ * itself happens. */
+export function computeFreezeCardPlay(state: GameState, playerId: PlayerId): MoveResult {
+  const player = state.players.find((p) => p.id === playerId);
+  if (!player) throw new Error(`Unknown player id: ${playerId}`);
+
+  const startTile = findTile(state.tiles, player.currentTileId);
+  const maxPosition = state.tiles.filter((t) => t.layerId === startTile.layerId).length;
+  const bonusPosition = Math.min(startTile.position + FREEZE_VALUE, maxPosition);
+
+  const path: MoveStep[] = [];
+  let landingTile = startTile;
+  let stuckTileId: TileId | null = null;
+
+  if (bonusPosition !== startTile.position) {
+    const bonusTile = tileAtPosition(state.tiles, startTile.layerId, bonusPosition);
+    path.push({ tileId: bonusTile.id, cause: "step" });
+    const chain = resolveEffectChain(state, bonusTile, new Set(state.frozenTiles));
+    path.push(...chain.path);
+    landingTile = chain.landingTile;
+    stuckTileId = chain.stuckTileId;
+  }
+
+  return {
+    playerId,
+    path,
+    finalTileId: landingTile.id,
+    wins: landingTile.position === maxPosition,
+    newlyFrozenTileIds: [startTile.id],
+    stuckTileId,
   };
 }
 
@@ -271,7 +356,13 @@ export function computeMove(state: GameState, playerId: PlayerId, roll: number):
  * independently through `computeMove` — so a teammate who lands on a
  * ladder/trapdoor still chains through it exactly like a normal move. */
 export function computeTeamAdvance(state: GameState, teamId: TeamId, amount: number): MoveResult[] {
-  return state.players.filter((p) => p.teamId === teamId).map((p) => computeMove(state, p.id, amount));
+  // A player currently stuck in a freeze episode (awaiting or having served
+  // their skipped turn, but not yet moved off the hazard) sits out
+  // team-advance/team-retreat cards entirely — those only move teammates
+  // who are actually free to move.
+  return state.players
+    .filter((p) => p.teamId === teamId && !p.frozenTileId)
+    .map((p) => computeMove(state, p.id, amount));
 }
 
 /** Every tile a "row-trap"/"column-trap" card played from `playerId`'s
@@ -301,13 +392,36 @@ export function trapCardTileIds(state: GameState, playerId: PlayerId, mode: "row
  * Anyone standing on one of those tiles right now, including the mover,
  * falls immediately; this is a one-time drop, not a change to the tiles'
  * own `effect` — a future player who lands there later is unaffected. */
-export function computeRowColumnTrap(state: GameState, playerId: PlayerId, mode: "row" | "column"): MoveResult[] {
+export interface RowColumnTrapResult {
+  results: MoveResult[];
+  /** Frozen hazard tiles caught in the row/column and destroyed outright —
+   * gone from `GameState.frozenTiles` regardless of whether anyone was
+   * standing on them. If a player was mid-freeze there and hadn't yet
+   * served their skipped turn, the penalty is cancelled too (as if the
+   * freeze never happened); if they'd already served it, only the tile
+   * itself is cleared (they may still fall through it like any other
+   * trapped tile). */
+  destroyedFrozenTileIds: TileId[];
+}
+
+export function computeRowColumnTrap(
+  state: GameState,
+  playerId: PlayerId,
+  mode: "row" | "column",
+): RowColumnTrapResult {
   const player = state.players.find((p) => p.id === playerId);
   if (!player) throw new Error(`Unknown player id: ${playerId}`);
 
   const originTile = findTile(state.tiles, player.currentTileId);
   const maxPosition = state.tiles.filter((t) => t.layerId === originTile.layerId).length;
   const trappedTileIds = new Set(trapCardTileIds(state, playerId, mode));
+
+  const destroyedFrozenTileIds = state.frozenTiles.filter((id) => trappedTileIds.has(id));
+  // The chain a falling tile lands through shouldn't treat its own
+  // just-destroyed hazard as still active.
+  const remainingFrozenTiles = new Set(
+    state.frozenTiles.filter((id) => !destroyedFrozenTileIds.includes(id)),
+  );
 
   const results: MoveResult[] = [];
   for (const p of state.players) {
@@ -316,17 +430,19 @@ export function computeRowColumnTrap(state: GameState, playerId: PlayerId, mode:
 
     const dropRow = mode === "column" ? 0 : tile.row - 1;
     const dropTile = tileAtPosition(state.tiles, tile.layerId, rowColToPosition(dropRow, tile.col));
-    const { landingTile, path: chainPath } = resolveEffectChain(state, dropTile);
+    const { landingTile, path: chainPath, stuckTileId } = resolveEffectChain(state, dropTile, remainingFrozenTiles);
 
     results.push({
       playerId: p.id,
       path: [{ tileId: dropTile.id, cause: "trapdoor" }, ...chainPath],
       finalTileId: landingTile.id,
       wins: landingTile.position === maxPosition,
+      newlyFrozenTileIds: [],
+      stuckTileId,
     });
   }
 
-  return results;
+  return { results, destroyedFrozenTileIds };
 }
 
 /** Dev-only test harness for the column-trap fall animation: teleports the
@@ -354,6 +470,72 @@ export function setupColumnTrapDevTest(state: GameState): GameState {
   return { ...state, players };
 }
 
+/** Advances the turn from `fromIndex`, skipping over any player who still
+ * owes a freeze penalty (`frozenSkipPending`) — that skip is consumed
+ * (cleared) the moment it would have been their turn, and play passes on to
+ * whoever comes after them. Returns the possibly-updated players array
+ * alongside the resulting index, since consuming a pending skip mutates
+ * that player's state. Bounded to one full lap so an (unrealistic) board
+ * where every player is simultaneously frozen can't loop forever. */
+function advanceTurnIndex(players: Player[], fromIndex: number): { players: Player[]; index: number } {
+  let index = fromIndex;
+  let updated = players;
+  for (let i = 0; i < players.length; i++) {
+    index = (index + 1) % players.length;
+    const candidate = updated[index];
+    if (!candidate.frozenSkipPending) break;
+    updated = updated.map((p) => (p.id === candidate.id ? { ...p, frozenSkipPending: false } : p));
+  }
+  return { players: updated, index };
+}
+
+/** Applies a move's freeze bookkeeping to the mover: if the move ended stuck
+ * on an already-frozen hazard, marks them as owing a skipped turn there; if
+ * they just moved *off* the tile they were previously stuck on, clears that
+ * so the tile can be freed. Returns the updated player plus the tile id (if
+ * any) that should now be dropped from `GameState.frozenTiles`. */
+function applyFreezeToPlayer(
+  player: Player,
+  prevTileId: TileId,
+  result: Pick<MoveResult, "stuckTileId">,
+): { player: Player; unfrozenTileId: TileId | null } {
+  if (player.frozenTileId && player.frozenTileId === prevTileId) {
+    return {
+      player: { ...player, frozenTileId: null, frozenSkipPending: false },
+      unfrozenTileId: player.frozenTileId,
+    };
+  }
+  if (result.stuckTileId) {
+    return {
+      player: { ...player, frozenTileId: result.stuckTileId, frozenSkipPending: true },
+      unfrozenTileId: null,
+    };
+  }
+  return { player, unfrozenTileId: null };
+}
+
+/** Removes `destroyedFrozenTileIds` from `frozenTiles` and, for any player
+ * still stuck on one of them, clears their freeze state — cancelling the
+ * pending skip entirely if they hadn't served it yet ("like nothing
+ * happened"), or just freeing the (already-vacated-of-penalty) tile if they
+ * had. */
+function destroyFrozenTiles(
+  frozenTiles: TileId[],
+  players: Player[],
+  destroyedFrozenTileIds: TileId[],
+): { frozenTiles: TileId[]; players: Player[] } {
+  if (destroyedFrozenTileIds.length === 0) return { frozenTiles, players };
+  const destroyed = new Set(destroyedFrozenTileIds);
+  return {
+    frozenTiles: frozenTiles.filter((id) => !destroyed.has(id)),
+    players: players.map((p) =>
+      p.frozenTileId && destroyed.has(p.frozenTileId)
+        ? { ...p, frozenTileId: null, frozenSkipPending: false }
+        : p,
+    ),
+  };
+}
+
 /** Weakens every "move" card in a hand by 1 (a +5 becomes +4, a -1 becomes
  * -2) — the effect of landing on a spiked "damage" tile. Other card types
  * (team-advance, team-retreat, row-trap, column-trap) carry no player-facing
@@ -371,23 +553,32 @@ export function applyMoveResult(state: GameState, result: MoveResult): GameState
     landingTile.effect.type === "ability" && landingTile.effect.abilityId === "extra-turn";
   const dealsDamage = landingTile.effect.type === "damage";
 
-  const players = state.players.map((p) =>
-    p.id === result.playerId
-      ? { ...p, currentTileId: result.finalTileId, hand: dealsDamage ? applyDamageToHand(p.hand) : p.hand }
-      : p,
+  const mover = state.players.find((p) => p.id === result.playerId)!;
+  const prevTileId = mover.currentTileId;
+  const { player: movedMover, unfrozenTileId } = applyFreezeToPlayer(
+    { ...mover, currentTileId: result.finalTileId, hand: dealsDamage ? applyDamageToHand(mover.hand) : mover.hand },
+    prevTileId,
+    result,
   );
+  const players = state.players.map((p) => (p.id === result.playerId ? movedMover : p));
 
-  const nextPlayerIndex = grantsExtraTurn
-    ? state.currentPlayerIndex
-    : (state.currentPlayerIndex + 1) % state.players.length;
+  const frozenTiles = [
+    ...state.frozenTiles.filter((id) => id !== unfrozenTileId),
+    ...result.newlyFrozenTileIds.filter((id) => !state.frozenTiles.includes(id)),
+  ];
+
+  const { players: rotatedPlayers, index: nextPlayerIndex } = grantsExtraTurn
+    ? { players, index: state.currentPlayerIndex }
+    : advanceTurnIndex(players, state.currentPlayerIndex);
 
   return {
     ...state,
-    players,
+    players: rotatedPlayers,
     currentPlayerIndex: nextPlayerIndex,
     turnCount: state.turnCount + 1,
     status: result.wins ? "finished" : "idle",
     winnerId: result.wins ? result.playerId : state.winnerId,
+    frozenTiles,
   };
 }
 
@@ -395,32 +586,52 @@ export function applyMoveResult(state: GameState, result: MoveResult): GameState
  * Unlike a single move, this never grants an extra turn (which teammate's
  * ability tile would even own it is ambiguous) — it just moves everyone and
  * passes play on. */
-export function applyTeamAdvance(state: GameState, results: MoveResult[]): GameState {
+export function applyTeamAdvance(
+  state: GameState,
+  results: MoveResult[],
+  destroyedFrozenTileIds: TileId[] = [],
+): GameState {
   let players = state.players;
+  let frozenTiles = state.frozenTiles;
   let winnerId = state.winnerId;
   let wins = false;
 
   for (const result of results) {
     const landingTile = findTile(state.tiles, result.finalTileId);
     const dealsDamage = landingTile.effect.type === "damage";
-    players = players.map((p) =>
-      p.id === result.playerId
-        ? { ...p, currentTileId: result.finalTileId, hand: dealsDamage ? applyDamageToHand(p.hand) : p.hand }
-        : p,
+    const mover = players.find((p) => p.id === result.playerId)!;
+    const prevTileId = mover.currentTileId;
+    const { player: movedMover, unfrozenTileId } = applyFreezeToPlayer(
+      { ...mover, currentTileId: result.finalTileId, hand: dealsDamage ? applyDamageToHand(mover.hand) : mover.hand },
+      prevTileId,
+      result,
     );
+    players = players.map((p) => (p.id === result.playerId ? movedMover : p));
+    frozenTiles = [
+      ...frozenTiles.filter((id) => id !== unfrozenTileId),
+      ...result.newlyFrozenTileIds.filter((id) => !frozenTiles.includes(id)),
+    ];
     if (result.wins) {
       winnerId = result.playerId;
       wins = true;
     }
   }
 
+  ({ frozenTiles, players } = destroyFrozenTiles(frozenTiles, players, destroyedFrozenTileIds));
+
+  const { players: rotatedPlayers, index: nextPlayerIndex } = advanceTurnIndex(
+    players,
+    state.currentPlayerIndex,
+  );
+
   return {
     ...state,
-    players,
-    currentPlayerIndex: (state.currentPlayerIndex + 1) % state.players.length,
+    players: rotatedPlayers,
+    currentPlayerIndex: nextPlayerIndex,
     turnCount: state.turnCount + 1,
     status: wins ? "finished" : state.status,
     winnerId,
+    frozenTiles,
   };
 }
 
@@ -541,6 +752,12 @@ export function applyTeamAdvanceCardPlay(
   playerId: PlayerId,
   cardId: CardId,
   results: MoveResult[],
+  destroyedFrozenTileIds: TileId[] = [],
 ): GameState {
-  return finalizeCardPlay(state, applyTeamAdvance(state, results), playerId, cardId);
+  return finalizeCardPlay(
+    state,
+    applyTeamAdvance(state, results, destroyedFrozenTileIds),
+    playerId,
+    cardId,
+  );
 }

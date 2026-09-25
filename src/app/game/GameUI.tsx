@@ -12,6 +12,17 @@ const CARD_WIDTH = 160;
 const CARD_HEIGHT = 250;
 const CARD_FONT_SIZE = 38;
 
+/** Timing for the "-1" pop shown over a hand card's big readout when a
+ * damage tile weakens it: the old value scales up and fades out, the "-1"
+ * badge floats up and fades independently, then the new value scales in
+ * once the old one's gone. Kept as three separate CSS animations (rather
+ * than swapping the text mid-animation from JS) so the crossfade timing
+ * only ever needs a `animation-delay`, no state-timed text swap. */
+const CARD_DAMAGE_POP_OUT_MS = 260;
+const CARD_DAMAGE_POP_IN_MS = 380;
+const CARD_DAMAGE_BADGE_MS = 800;
+const CARD_DAMAGE_POP_TOTAL_MS = Math.max(CARD_DAMAGE_POP_OUT_MS + CARD_DAMAGE_POP_IN_MS, CARD_DAMAGE_BADGE_MS);
+
 const HAND_PERSPECTIVE_PX = 900;
 const CARD_TILT_X_DEG = 42;
 const CARD_FAN_STEP_DEG = 6;
@@ -147,12 +158,16 @@ function sleep(ms: number) {
  * them as the same kind of danger as a plain backward-move card, just at
  * board scale. */
 const TRAP_CARD_COLOR = "#ff2d95";
+/** Freeze cards get the same icy accent as the frozen-tile/overlay visuals
+ * elsewhere (Scene's FROZEN_HAZARD_COLOR, the freeze flash overlays). */
+const FREEZE_CARD_COLOR = "#8fe8ff";
 
 function cardColor(card: Card, playing: boolean): string {
   if (playing) return "#555";
   if (card.type === "team-advance") return "#e6ff2e";
   if (card.type === "team-retreat") return "#ff8c42";
   if (card.type === "row-trap" || card.type === "column-trap") return TRAP_CARD_COLOR;
+  if (card.type === "freeze") return FREEZE_CARD_COLOR;
   return card.value < 0 ? "#ff2d95" : "#22e3ff";
 }
 
@@ -161,6 +176,7 @@ function cardLabel(card: Card): string {
   if (card.type === "team-retreat") return `${card.value}`;
   if (card.type === "row-trap") return "ROW";
   if (card.type === "column-trap") return "COL";
+  if (card.type === "freeze") return `+${card.value}`;
   return card.value > 0 ? `+${card.value}` : `${card.value}`;
 }
 
@@ -267,6 +283,95 @@ function TrapCardFace({ card, color }: { card: Card; color: string }) {
   );
 }
 
+/** A six-branch snowflake, each arm carrying a couple of side ticks — the
+ * freeze card's center icon, drawn the same procedural-lines way as the
+ * frost crystal overlays rather than a raster/emoji glyph. */
+function SnowflakeIcon({ color }: { color: string }) {
+  const armLength = 46;
+  const branches = [0, 60, 120, 180, 240, 300];
+
+  return (
+    <g>
+      {branches.map((deg) => {
+        const rad = (deg * Math.PI) / 180;
+        const x2 = Math.cos(rad) * armLength;
+        const y2 = Math.sin(rad) * armLength;
+        const tick = (t: number, side: number) => {
+          const bx = Math.cos(rad) * armLength * t;
+          const by = Math.sin(rad) * armLength * t;
+          const tickLen = armLength * (t < 0.7 ? 0.24 : 0.16);
+          const tickRad = rad + (side * Math.PI) / 3;
+          return { x1: bx, y1: by, x2: bx + Math.cos(tickRad) * tickLen, y2: by + Math.sin(tickRad) * tickLen };
+        };
+        const ticks = [tick(0.55, 1), tick(0.55, -1), tick(0.82, 1), tick(0.82, -1)];
+        return (
+          <g key={deg}>
+            <line x1={0} y1={0} x2={x2} y2={y2} stroke={color} strokeWidth={3} strokeLinecap="round" />
+            {ticks.map((t, i) => (
+              <line key={i} x1={t.x1} y1={t.y1} x2={t.x2} y2={t.y2} stroke={color} strokeWidth={2.2} strokeLinecap="round" />
+            ))}
+          </g>
+        );
+      })}
+      <circle cx={0} cy={0} r={3} fill={color} />
+    </g>
+  );
+}
+
+/** Unique face for a "freeze" card: the clipped-corner HUD frame shared by
+ * every card, but with a snowflake icon in place of the plain numeric
+ * readout (see `TrapCardFace`, which this mirrors) — a "+1" alone wouldn't
+ * hint that it also plants a frozen hazard behind the mover. */
+function FreezeCardFace({ card, color }: { card: Card; color: string }) {
+  const w = CARD_WIDTH;
+  const h = CARD_HEIGHT;
+  const cut = 16;
+
+  return (
+    <svg viewBox={`0 0 ${w} ${h}`} width="100%" height="100%" style={{ display: "block" }}>
+      <polygon
+        points={`${cut},0 ${w},0 ${w},${h - cut} ${w - cut},${h} 0,${h} 0,${cut}`}
+        fill="#0a0c14"
+        stroke={color}
+        strokeWidth={2}
+      />
+      {/* corner circuit accents, matching CardFace */}
+      <path d={`M ${cut + 10} 6 h 22 l 8 8`} fill="none" stroke={color} strokeOpacity={0.55} strokeWidth={1.5} />
+      <circle cx={cut + 42} cy={14} r={2} fill={color} fillOpacity={0.7} />
+      <path d={`M ${w - 6} ${h - cut - 10} v -22 l -8 -8`} fill="none" stroke={color} strokeOpacity={0.4} strokeWidth={1.5} />
+      {/* label, top-left */}
+      <text x={14} y={30} fontSize={15} fontWeight={700} fontFamily="sans-serif" fill={color}>
+        {cardLabel(card)}
+      </text>
+      {/* the snowflake icon, centered */}
+      <g transform={`translate(${w / 2}, ${h * 0.4})`}>
+        <SnowflakeIcon color={color} />
+      </g>
+      {/* icy hazard stripes, reused from CardBack's/TrapCardFace's language */}
+      <clipPath id={`freeze-card-hazard-${card.id}`}>
+        <rect x={14} y={h - 66} width={w - 28} height={14} />
+      </clipPath>
+      <g clipPath={`url(#freeze-card-hazard-${card.id})`} stroke={color} strokeOpacity={0.6} strokeWidth={3}>
+        {Array.from({ length: 14 }, (_, i) => {
+          const x = 4 + i * 9;
+          return <line key={i} x1={x} y1={h - 50} x2={x + 16} y2={h - 80} />;
+        })}
+      </g>
+      {/* name, bottom */}
+      <text x={w / 2} y={h - 40} fontSize={13} fontWeight={800} fontFamily="sans-serif" fill={color} textAnchor="middle">
+        FREEZE
+      </text>
+      <text x={w / 2} y={h - 22} fontSize={9} fontWeight={600} fontFamily="sans-serif" fill={color} opacity={0.7} textAnchor="middle">
+        Move 1, freeze tile behind
+      </text>
+      {/* corner dots, bottom-right */}
+      {[0, 1, 2].map((i) => (
+        <circle key={i} cx={w - 14 - i * 9} cy={h - 14} r={1.6} fill={color} fillOpacity={0.5} />
+      ))}
+    </svg>
+  );
+}
+
 /** Sci-fi HUD face for a card: clipped-corner frame, corner circuit
  * accents, the big value readout, a pair of chevrons showing which way the
  * card moves a token, and a segmented bar whose fill length reads off the
@@ -274,9 +379,23 @@ function TrapCardFace({ card, color }: { card: Card; color: string }) {
  * exactly fill a `CARD_WIDTH` x `CARD_HEIGHT` slot; the caller supplies the
  * glow/box-shadow around it. Row/column-trap cards get their own distinct
  * face (`TrapCardFace`) instead, since a numeric readout doesn't apply. */
-function CardFace({ card, color }: { card: Card; color: string }) {
+function CardFace({
+  card,
+  color,
+  pop,
+}: {
+  card: Card;
+  color: string;
+  /** Set for one damage-pop cycle right after a "damage" tile weakens this
+   * card, so the big readout can animate from the pre-damage value down to
+   * `card.value` instead of just snapping to it. */
+  pop?: { fromValue: number };
+}) {
   if (card.type === "row-trap" || card.type === "column-trap") {
     return <TrapCardFace card={card} color={color} />;
+  }
+  if (card.type === "freeze") {
+    return <FreezeCardFace card={card} color={color} />;
   }
   const backward = cardDirection(card) === "backward";
   const cut = 16;
@@ -308,19 +427,79 @@ function CardFace({ card, color }: { card: Card; color: string }) {
       <text x={14} y={30} fontSize={15} fontWeight={700} fontFamily="sans-serif" fill={color}>
         {cardLabel(card)}
       </text>
-      {/* big readout */}
-      <text
-        x={w / 2}
-        y={h * 0.42}
-        fontSize={CARD_FONT_SIZE}
-        fontWeight={800}
-        fontFamily="sans-serif"
-        fill={color}
-        textAnchor="middle"
-        dominantBaseline="middle"
-      >
-        {cardLabel(card)}
-      </text>
+      {/* big readout — a plain static label normally, or (right after a
+          damage tile weakens this card) a crossfade from the pre-damage
+          value to the new one plus a floating "-1" badge */}
+      {pop ? (
+        <>
+          <text
+            x={w / 2}
+            y={h * 0.42}
+            fontSize={CARD_FONT_SIZE}
+            fontWeight={800}
+            fontFamily="sans-serif"
+            fill={color}
+            textAnchor="middle"
+            dominantBaseline="middle"
+            style={{
+              transformBox: "fill-box",
+              transformOrigin: "center",
+              animation: `card-value-pop-out ${CARD_DAMAGE_POP_OUT_MS}ms ease-in forwards`,
+            }}
+          >
+            {cardLabel({ ...card, value: pop.fromValue })}
+          </text>
+          <text
+            x={w / 2}
+            y={h * 0.42}
+            fontSize={CARD_FONT_SIZE}
+            fontWeight={800}
+            fontFamily="sans-serif"
+            fill={color}
+            textAnchor="middle"
+            dominantBaseline="middle"
+            style={{
+              opacity: 0,
+              transformBox: "fill-box",
+              transformOrigin: "center",
+              animation: `card-value-pop-in ${CARD_DAMAGE_POP_IN_MS}ms ease-out ${CARD_DAMAGE_POP_OUT_MS}ms forwards`,
+            }}
+          >
+            {cardLabel(card)}
+          </text>
+          <text
+            x={w / 2}
+            y={h * 0.42 - 34}
+            fontSize={20}
+            fontWeight={800}
+            fontFamily="sans-serif"
+            fill="#ff2d95"
+            textAnchor="middle"
+            dominantBaseline="middle"
+            style={{
+              opacity: 0,
+              transformBox: "fill-box",
+              transformOrigin: "center",
+              animation: `card-damage-badge ${CARD_DAMAGE_BADGE_MS}ms ease-out forwards`,
+            }}
+          >
+            {card.value - pop.fromValue}
+          </text>
+        </>
+      ) : (
+        <text
+          x={w / 2}
+          y={h * 0.42}
+          fontSize={CARD_FONT_SIZE}
+          fontWeight={800}
+          fontFamily="sans-serif"
+          fill={color}
+          textAnchor="middle"
+          dominantBaseline="middle"
+        >
+          {cardLabel(card)}
+        </text>
+      )}
       {/* chevrons */}
       <g transform={`translate(${w / 2}, ${chevronY})`}>
         <polyline points={chevronPoints} fill="none" stroke={color} strokeWidth={5} strokeLinecap="round" strokeLinejoin="round" />
@@ -722,6 +901,306 @@ function CardOfferFan({
   );
 }
 
+/** Whether a move lands on a spiked "damage" tile — used to trigger the
+ * screen-shake/orange-flash feedback for the controlled player(s) taking a
+ * hit. Checked against `finalTileId` rather than the last step of `path`:
+ * a "+0" move card played while already standing on a damage tile has an
+ * empty path (no tiles crossed) but still re-triggers the damage, since the
+ * mover lands on it again as part of resolving that play. */
+function landsOnDamageTile(tiles: Tile[], finalTileId: TileId): boolean {
+  return findTile(tiles, finalTileId).effect.type === "damage";
+}
+
+/** Whether a move's final step lands on a tile that was *already* an active
+ * frozen hazard going into this move — the "you're stuck, lose your next
+ * turn" case, as opposed to being the first player to trigger a fresh
+ * freeze tile (which is a bonus, not a hit). `prevFrozenTiles` must be the
+ * board's frozen-tile set from just before this move resolved. */
+function landsOnActiveFreezeHazard(prevFrozenTiles: TileId[], path: MoveStep[]): boolean {
+  if (path.length === 0) return false;
+  const finalStep = path[path.length - 1];
+  return prevFrozenTiles.includes(finalStep.tileId);
+}
+
+/** How long the orange vignette stays visible, and the (slightly shorter)
+ * duration of the accompanying shake — both fired together when a
+ * controlled player lands on a "damage" tile. */
+const DAMAGE_FLASH_MS = 500;
+const DAMAGE_SHAKE_MS = 400;
+
+/** Full-screen orange vignette flashed over the game view on taking damage.
+ * Remounted via a changing `key` each hit, so its CSS animation always plays
+ * from the start even on back-to-back hits. */
+function DamageFlashOverlay() {
+  return (
+    <div
+      style={{
+        position: "absolute",
+        inset: 0,
+        zIndex: 40,
+        pointerEvents: "none",
+        background: "radial-gradient(ellipse at center, rgba(255,90,20,0) 35%, rgba(255,80,10,0.65) 100%)",
+        animation: `damage-flash ${DAMAGE_FLASH_MS}ms ease-out`,
+      }}
+    />
+  );
+}
+
+/** How long the icy vignette (and frost crystals) stay visible when a
+ * controlled player gets stuck on an already-active frozen tile (loses
+ * their next turn). Longer than the plain damage flash so the crystals have
+ * time to read as "growing in" rather than just blinking. */
+const FREEZE_FLASH_MS = 900;
+
+interface FrostSegment {
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+  width: number;
+  opacity: number;
+}
+
+/** Tiny deterministic PRNG (mulberry32) — the frost pattern below only needs
+ * to look organic, not actually be random, and is built once at module load,
+ * so a fixed seed per call keeps it reproducible instead of reshuffling on
+ * every render. */
+function mulberry32(seed: number): () => number {
+  let state = seed;
+  return () => {
+    state |= 0;
+    state = (state + 0x6d2b79f5) | 0;
+    let t = Math.imul(state ^ (state >>> 15), 1 | state);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/** Recursively branches one frost "fern" spike from (x, y) heading at
+ * `angleDeg`, shrinking length/width and throwing off a couple of angled
+ * side-branches each generation — the same jagged, feathery branching real
+ * window-frost crystals grow in, rather than a bare straight line. Growth
+ * stops as soon as it strays past `maxReach` from `origin` (the cluster's
+ * anchor on the screen edge), which is what actually keeps the crystals
+ * confined to a border band instead of the branching recursion running the
+ * spikes most of the way across the screen. */
+function growFrostBranch(
+  segments: FrostSegment[],
+  x: number,
+  y: number,
+  angleDeg: number,
+  length: number,
+  width: number,
+  depth: number,
+  rand: () => number,
+  origin: { x: number; y: number },
+  maxReach: number,
+) {
+  if (depth <= 0 || length < 1.2) return;
+  const rad = (angleDeg * Math.PI) / 180;
+  const x2 = x + Math.cos(rad) * length;
+  const y2 = y + Math.sin(rad) * length;
+  if (Math.hypot(x2 - origin.x, y2 - origin.y) > maxReach) return;
+  segments.push({ x1: x, y1: y, x2, y2, width, opacity: 0.16 + depth * 0.07 });
+
+  const branchCount = depth > 2 ? 2 : 1;
+  for (let i = 0; i < branchCount; i++) {
+    const t = 0.35 + rand() * 0.4;
+    const side = i % 2 === 0 ? 1 : -1;
+    growFrostBranch(
+      segments,
+      x + (x2 - x) * t,
+      y + (y2 - y) * t,
+      angleDeg + side * (26 + rand() * 22),
+      length * (0.42 + rand() * 0.16),
+      width * 0.65,
+      depth - 1,
+      rand,
+      origin,
+      maxReach,
+    );
+  }
+
+  growFrostBranch(
+    segments,
+    x2,
+    y2,
+    angleDeg + (rand() - 0.5) * 10,
+    length * 0.72,
+    width * 0.75,
+    depth - 1,
+    rand,
+    origin,
+    maxReach,
+  );
+}
+
+/** One frost cluster growing inward from an edge point — a handful of fern
+ * spikes fanned around the inward-facing angle, like a real frost-covered
+ * corner of a window pane, each capped at `maxReach` from that edge point so
+ * the whole cluster stays a border decoration rather than creeping toward
+ * the center of the screen. */
+function frostCluster(
+  x: number,
+  y: number,
+  inwardAngleDeg: number,
+  maxReach: number,
+  seed: number,
+): FrostSegment[] {
+  const rand = mulberry32(seed);
+  const segments: FrostSegment[] = [];
+  const origin = { x, y };
+  const spikeCount = 3 + Math.floor(rand() * 2);
+  for (let i = 0; i < spikeCount; i++) {
+    growFrostBranch(
+      segments,
+      x,
+      y,
+      inwardAngleDeg + (rand() - 0.5) * 46,
+      maxReach * (0.4 + rand() * 0.25),
+      1.3,
+      4,
+      rand,
+      origin,
+      maxReach,
+    );
+  }
+  return segments;
+}
+
+/** Coordinate space the frost border is authored in — close to a typical
+ * 16:9 viewport so `preserveAspectRatio="none"` scaling to the actual screen
+ * doesn't visibly skew the branch angles. */
+const FROST_VIEW_W = 160;
+const FROST_VIEW_H = 90;
+
+/** Frost creeping in from all four screen edges, denser and longer-reaching
+ * at the corners — the vignette-y "ice crystals framing the view" look,
+ * built once at module load (see `mulberry32`) rather than regenerated on
+ * every flash. */
+// Border band depth each cluster is capped to — a fraction of that edge's
+// own dimension, so the crystals read as a frame around the view instead of
+// reaching toward the center.
+const FROST_EDGE_REACH_H = FROST_VIEW_H * 0.11;
+const FROST_EDGE_REACH_V = FROST_VIEW_W * 0.11;
+
+const FROST_BORDER_SEGMENTS: FrostSegment[] = (() => {
+  const clusters: { x: number; y: number; angle: number; reach: number; seed: number }[] = [];
+  const edgeT = [0.03, 0.13, 0.26, 0.5, 0.74, 0.87, 0.97];
+  const cornerBoost = (t: number) => (Math.min(t, 1 - t) < 0.18 ? 1.5 : 1);
+
+  edgeT.forEach((t, i) => {
+    const x = t * FROST_VIEW_W;
+    clusters.push({ x, y: 0, angle: 90, reach: FROST_EDGE_REACH_H * cornerBoost(t), seed: 100 + i });
+    clusters.push({ x, y: FROST_VIEW_H, angle: -90, reach: FROST_EDGE_REACH_H * cornerBoost(t), seed: 200 + i });
+  });
+  edgeT.forEach((t, i) => {
+    const y = t * FROST_VIEW_H;
+    clusters.push({ x: 0, y, angle: 0, reach: FROST_EDGE_REACH_V * cornerBoost(t), seed: 300 + i });
+    clusters.push({ x: FROST_VIEW_W, y, angle: 180, reach: FROST_EDGE_REACH_V * cornerBoost(t), seed: 400 + i });
+  });
+
+  return clusters.flatMap((c) => frostCluster(c.x, c.y, c.angle, c.reach, c.seed));
+})();
+
+/** The frost crystal branches themselves, layered over `FreezeFlashOverlay`'s
+ * plain radial vignette — an SVG so the jagged fern shapes stay crisp at any
+ * resolution instead of needing a raster texture. Icy glow via `filter`
+ * rather than per-line shadows, to keep the (large) segment count cheap. */
+function FrostCrystalOverlay() {
+  return (
+    <svg
+      viewBox={`0 0 ${FROST_VIEW_W} ${FROST_VIEW_H}`}
+      preserveAspectRatio="none"
+      style={{
+        position: "absolute",
+        inset: 0,
+        width: "100%",
+        height: "100%",
+        filter: "drop-shadow(0 0 0.6px #eafbff)",
+      }}
+    >
+      {FROST_BORDER_SEGMENTS.map((s, i) => (
+        <line
+          key={i}
+          x1={s.x1}
+          y1={s.y1}
+          x2={s.x2}
+          y2={s.y2}
+          stroke="#eafbff"
+          strokeWidth={s.width * 0.16}
+          strokeLinecap="round"
+          opacity={s.opacity}
+        />
+      ))}
+    </svg>
+  );
+}
+
+/** How long the persistent "you're frozen" frame takes to fade in/out as
+ * that status turns on/off, so it doesn't just snap. */
+const FROZEN_STATUS_FADE_MS = 500;
+
+/** Steady (not flashing) frost frame kept on screen for as long as a
+ * controlled player is actually stuck on a frozen tile — from the moment
+ * they land there until they finally move off it again, including every
+ * turn in between where their own turn is skipped. Always mounted so
+ * `visible` can drive a plain CSS opacity transition instead of a
+ * mount/unmount, which would skip the fade. Reuses the same frost crystal
+ * border as the momentary `FreezeFlashOverlay`, just held steady at a lower
+ * opacity instead of pulsing. */
+function FrozenStatusOverlay({ visible }: { visible: boolean }) {
+  return (
+    <div
+      style={{
+        position: "absolute",
+        inset: 0,
+        zIndex: 39,
+        pointerEvents: "none",
+        opacity: visible ? 0.75 : 0,
+        transition: `opacity ${FROZEN_STATUS_FADE_MS}ms ease`,
+      }}
+    >
+      <div
+        style={{
+          position: "absolute",
+          inset: 0,
+          background: "radial-gradient(ellipse at center, rgba(143,232,255,0) 55%, rgba(143,232,255,0.28) 100%)",
+        }}
+      />
+      <FrostCrystalOverlay />
+    </div>
+  );
+}
+
+/** Full-screen icy-blue vignette (plus a frame of frost crystals creeping in
+ * from the edges) flashed over the game view when a controlled player lands
+ * on an active frozen hazard — the "freeze" analog of `DamageFlashOverlay`.
+ * Remounted via a changing `key` each hit, so the animation always plays
+ * from the start even on back-to-back hits. */
+function FreezeFlashOverlay() {
+  return (
+    <div
+      style={{
+        position: "absolute",
+        inset: 0,
+        zIndex: 40,
+        pointerEvents: "none",
+        animation: `freeze-flash ${FREEZE_FLASH_MS}ms ease-out`,
+      }}
+    >
+      <div
+        style={{
+          position: "absolute",
+          inset: 0,
+          background: "radial-gradient(ellipse at center, rgba(143,232,255,0) 35%, rgba(143,232,255,0.55) 100%)",
+        }}
+      />
+      <FrostCrystalOverlay />
+    </div>
+  );
+}
+
 interface Burst {
   id: number;
   x: number;
@@ -1112,39 +1591,6 @@ function FullscreenButton() {
   );
 }
 
-/** Dev-only HUD button that sends `dev_setup_column_trap_test`, teleporting
- * the current player to the top row and slotting a "column-trap" card into
- * their (and the next player's) hand — a one-click way to set up and replay
- * the trapdoor-fall animation without grinding through the deck for the
- * right roll. Only rendered outside a production build; see the matching
- * server-side `dev` guard in server.ts. */
-function DevColumnTrapTestButton({ onClick }: { onClick: () => void }) {
-  const color = "#ff2d95";
-  return (
-    <button
-      title="Dev: move current player to top row and deal a column-trap card"
-      onClick={onClick}
-      style={{
-        position: "absolute",
-        top: 30,
-        right: 96,
-        zIndex: 20,
-        padding: "8px 12px",
-        borderRadius: 6,
-        border: `1px solid ${color}`,
-        background: "rgba(255, 45, 149, 0.12)",
-        color,
-        fontSize: 11,
-        fontFamily: "monospace",
-        letterSpacing: "0.05em",
-        cursor: "pointer",
-      }}
-    >
-      TEST COLUMN TRAP
-    </button>
-  );
-}
-
 /** HUD panel occupying the hand bar's left slot (where a lone player-info
  * readout used to sit), listing one row per team with that team's progress
  * toward the actual win condition — how many of its players have reached
@@ -1457,6 +1903,37 @@ export default function GameUI({
   const [cardAnim, setCardAnim] = useState<CardAnim | null>(null);
   const [burst, setBurst] = useState<Burst | null>(null);
   const burstIdRef = useRef(0);
+  const [damageFlash, setDamageFlash] = useState<number | null>(null);
+  const damageFlashIdRef = useRef(0);
+  const [freezeFlash, setFreezeFlash] = useState<number | null>(null);
+  const freezeFlashIdRef = useRef(0);
+  // The board's frozen-tile set as of the last committed state — read (not
+  // written) inside the `card_played` handler below, before `state` itself
+  // updates, so a move can be checked against whichever tiles were already
+  // active hazards going into it.
+  const frozenTilesRef = useRef<TileId[]>(initialState.frozenTiles);
+  useEffect(() => {
+    frozenTilesRef.current = state.frozenTiles;
+  }, [state.frozenTiles]);
+  // Every player's hand as of the last committed state, read (not written)
+  // inside the `card_played` handler below, before `state` itself updates —
+  // gives the pre-damage card values to animate the hand's "-1" pop from
+  // once the post-damage state lands (see `triggerDamagePop`).
+  const handsRef = useRef<Record<PlayerId, Card[]>>(
+    Object.fromEntries(initialState.players.map((p) => [p.id, p.hand])),
+  );
+  useEffect(() => {
+    handsRef.current = Object.fromEntries(state.players.map((p) => [p.id, p.hand]));
+  }, [state.players]);
+  // Non-null for one damage-pop cycle right after a controlled player's hand
+  // is weakened by landing on a "damage" tile — `fromValues` holds each
+  // affected card's pre-damage value, keyed by card id, for `CardFace` to
+  // animate from (see `landsOnDamageTile`/`applyDamageToHand`).
+  const [damagePop, setDamagePop] = useState<{ id: number; playerId: PlayerId; fromValues: Record<CardId, number> } | null>(
+    null,
+  );
+  const damagePopIdRef = useRef(0);
+  const sceneShakeRef = useRef<HTMLDivElement | null>(null);
   const [offerProgress, setOfferProgress] = useState(1);
   const [selectedOfferIds, setSelectedOfferIds] = useState<string[]>([]);
   const [offerResolving, setOfferResolving] = useState(false);
@@ -1478,6 +1955,51 @@ export default function GameUI({
     const timer = setTimeout(() => setBurst(null), BURST_MS);
     return () => clearTimeout(timer);
   }, [burst]);
+
+  // Restarts the screen-shake animation imperatively (rather than relying on
+  // React re-mounting a keyed element, which would tear down and rebuild the
+  // whole Scene/WebGL subtree) so consecutive hits each replay in full, then
+  // clears the flash overlay once it's done.
+  useEffect(() => {
+    if (damageFlash === null) return;
+    const el = sceneShakeRef.current;
+    if (el) {
+      el.style.animation = "none";
+      void el.offsetHeight;
+      el.style.animation = `damage-shake ${DAMAGE_SHAKE_MS}ms ease-in-out`;
+    }
+    const timer = setTimeout(() => setDamageFlash(null), DAMAGE_FLASH_MS);
+    return () => clearTimeout(timer);
+  }, [damageFlash]);
+
+  const triggerDamageFlash = () => {
+    damageFlashIdRef.current += 1;
+    setDamageFlash(damageFlashIdRef.current);
+  };
+
+  // Clears the hand's "-1" pop once its longest constituent animation
+  // (`CARD_DAMAGE_POP_TOTAL_MS`) has had time to finish.
+  useEffect(() => {
+    if (!damagePop) return;
+    const timer = setTimeout(() => setDamagePop(null), CARD_DAMAGE_POP_TOTAL_MS);
+    return () => clearTimeout(timer);
+  }, [damagePop]);
+
+  const triggerDamagePop = (playerId: PlayerId, fromValues: Record<CardId, number>) => {
+    damagePopIdRef.current += 1;
+    setDamagePop({ id: damagePopIdRef.current, playerId, fromValues });
+  };
+
+  useEffect(() => {
+    if (freezeFlash === null) return;
+    const timer = setTimeout(() => setFreezeFlash(null), FREEZE_FLASH_MS);
+    return () => clearTimeout(timer);
+  }, [freezeFlash]);
+
+  const triggerFreezeFlash = () => {
+    freezeFlashIdRef.current += 1;
+    setFreezeFlash(freezeFlashIdRef.current);
+  };
 
 
   // Tracks the topmost deck card's own top-left corner on screen, so the
@@ -1591,6 +2113,12 @@ export default function GameUI({
   const myPlayer = isMyTurn
     ? activePlayer
     : (state.players.find((p) => controlledPlayerIds.includes(p.id)) ?? activePlayer);
+  // True from the moment any controlled player lands on a frozen tile until
+  // they finally move off it again — spans however many turns (their own
+  // skipped one included) that takes, unlike the momentary `freezeFlash`.
+  const isControlledPlayerFrozen = state.players.some(
+    (p) => controlledPlayerIds.includes(p.id) && p.frozenTileId !== null,
+  );
 
   // Shared tail of playing any card: shrinks/fades the held card into the
   // mover's token, fires the consume burst, runs every affected player's
@@ -1603,6 +2131,11 @@ export default function GameUI({
     mover: PlayerId,
     moveAnimTargets: { playerId: PlayerId; path: MoveStep[] }[],
     commit: (s: GameState) => GameState,
+    // Fired once every affected token's board animation has actually
+    // finished (right before the new state commits) — used for effects that
+    // need to read as happening *on* the landed tile (the hand's damage
+    // pop) rather than at move-start, like `triggerDamageFlash` below.
+    onLand?: () => void,
   ) => {
     // Read the mover's screen position right as the shrink kicks off, so
     // the card heads toward wherever they currently sit on the board
@@ -1632,6 +2165,7 @@ export default function GameUI({
     const moveAnimations = moveAnimTargets.map((t) => sceneHandleRef.current?.animateMove(t.playerId, t.path));
     await Promise.all([...moveAnimations, sleep(SHRINK_MS)]);
 
+    onLand?.();
     setState((s) => commit(s));
     setCardAnim(null);
     setPlaying(false);
@@ -1640,9 +2174,15 @@ export default function GameUI({
   // Applies a `card_played` broadcast on a client that didn't initiate it:
   // just runs every affected player's board-move animation (no hand-card
   // fly-in — this client has no button/origin for a card it didn't play),
-  // then commits the server's authoritative state.
-  const applyRemoteCardPlay = async (moves: { playerId: PlayerId; path: MoveStep[] }[], nextState: GameState) => {
+  // then commits the server's authoritative state. `onLand` — see
+  // `consumeCard` — fires once those animations actually finish.
+  const applyRemoteCardPlay = async (
+    moves: { playerId: PlayerId; path: MoveStep[] }[],
+    nextState: GameState,
+    onLand?: () => void,
+  ) => {
     await Promise.all(moves.map((m) => sceneHandleRef.current?.animateMove(m.playerId, m.path)));
+    onLand?.();
     setState(nextState);
   };
 
@@ -1650,12 +2190,48 @@ export default function GameUI({
     () =>
       subscribe((msg) => {
         if (msg.event === "card_played") {
+          const damagedMove = msg.moves.find((m) => {
+            if (!controlledPlayerIds.includes(m.playerId)) return false;
+            const finalTileId = msg.state.players.find((p) => p.id === m.playerId)?.currentTileId;
+            return !!finalTileId && landsOnDamageTile(msg.state.tiles, finalTileId);
+          });
+          const tookDamage = !!damagedMove;
+          const gotFrozen = msg.moves.some(
+            (m) => controlledPlayerIds.includes(m.playerId) && landsOnActiveFreezeHazard(frozenTilesRef.current, m.path),
+          );
+          // Snapshot each weakened "move" card's pre-damage value now, while
+          // `handsRef` still holds the hand as it was going into this play —
+          // `fireDamagePop` (deferred to line up with when `state` actually
+          // picks up the new values) reads it back later.
+          const fireDamagePop = damagedMove
+            ? () => {
+                const prevHand = handsRef.current[damagedMove.playerId] ?? [];
+                const nextHand = msg.state.players.find((p) => p.id === damagedMove.playerId)?.hand ?? [];
+                const fromValues: Record<CardId, number> = {};
+                for (const c of prevHand) {
+                  if (c.type !== "move") continue;
+                  const next = nextHand.find((nc) => nc.id === c.id);
+                  if (next && next.value !== c.value) fromValues[c.id] = c.value;
+                }
+                if (Object.keys(fromValues).length > 0) triggerDamagePop(damagedMove.playerId, fromValues);
+              }
+            : null;
+          // Fire every landing-triggered effect (flash/shake, freeze flash,
+          // hand damage pop) together once the token has actually finished
+          // traveling to the tile, rather than at move-start — otherwise a
+          // multi-tile move reads as "damaged" before it's even reached the
+          // spiked tile.
+          const fireLandEffects = () => {
+            if (tookDamage) triggerDamageFlash();
+            if (gotFrozen) triggerFreezeFlash();
+            fireDamagePop?.();
+          };
           const awaiting = awaitingPlayRef.current;
           if (awaiting) {
             awaitingPlayRef.current = null;
-            void consumeCard(msg.card, awaiting.mover, msg.moves, () => msg.state);
+            void consumeCard(msg.card, awaiting.mover, msg.moves, () => msg.state, fireLandEffects);
           } else {
-            void applyRemoteCardPlay(msg.moves, msg.state);
+            void applyRemoteCardPlay(msg.moves, msg.state, fireLandEffects);
           }
         } else if (msg.event === "offer_updated") {
           setState(msg.state);
@@ -1728,9 +2304,12 @@ export default function GameUI({
         background: "#020309",
       }}
     >
-      <div style={{ position: "relative", flex: 1, minHeight: 0 }}>
+      <div ref={sceneShakeRef} style={{ position: "relative", flex: 1, minHeight: 0 }}>
         <Scene state={state} handleRef={sceneHandleRef} onOrbitModeChange={setOrbitMode} />
-        {state.cardOffer && deckAnchor && (
+        {damageFlash !== null && <DamageFlashOverlay key={damageFlash} />}
+        <FrozenStatusOverlay visible={isControlledPlayerFrozen} />
+        {freezeFlash !== null && <FreezeFlashOverlay key={freezeFlash} />}
+        {state.cardOffer && deckAnchor && controlledPlayerIds.includes(state.cardOffer.playerId) && (
           // Draws the eye toward the offer fan (anchored bottom-right, by the
           // deck) by dimming everything else — darkest at the opposite,
           // top-left corner and clear right where the cards themselves sit,
@@ -1753,9 +2332,6 @@ export default function GameUI({
           onToggleOrbit={() => sceneHandleRef.current?.setOrbitMode(!orbitMode)}
         />
         <FullscreenButton />
-        {process.env.NODE_ENV !== "production" && (
-          <DevColumnTrapTestButton onClick={() => send({ action: "dev_setup_column_trap_test" })} />
-        )}
         {state.status === "finished" && <TurnIndicator state={state} player={activePlayer} />}
       {state.status !== "finished" && (
         <div
@@ -1802,6 +2378,8 @@ export default function GameUI({
                 const color = cardColor(card, locked);
                 const mid = (myPlayer.hand.length - 1) / 2;
                 const offset = i - mid;
+                const popFromValue =
+                  damagePop && damagePop.playerId === myPlayer.id ? damagePop.fromValues[card.id] : undefined;
                 return (
                   <button
                     key={card.id}
@@ -1827,7 +2405,11 @@ export default function GameUI({
                       visibility: isAnimating ? "hidden" : "visible",
                     }}
                   >
-                    <CardFace card={card} color={color} />
+                    <CardFace
+                      card={card}
+                      color={color}
+                      pop={popFromValue !== undefined ? { fromValue: popFromValue } : undefined}
+                    />
                   </button>
                 );
               })}
@@ -1849,7 +2431,7 @@ export default function GameUI({
           onSelect={handleSelectRetreatTarget}
         />
       )}
-      {state.cardOffer && deckAnchor && (
+      {state.cardOffer && deckAnchor && controlledPlayerIds.includes(state.cardOffer.playerId) && (
         <CardOfferFan
           key={state.cardOffer.offered.map((c) => c.id).join(",")}
           offer={state.cardOffer}
@@ -1857,7 +2439,7 @@ export default function GameUI({
           anchor={deckAnchor}
           selectedIds={selectedOfferIds}
           resolving={offerResolving}
-          locked={playing || !controlledPlayerIds.includes(state.cardOffer.playerId)}
+          locked={playing}
           onToggle={handleToggleOfferCard}
         />
       )}
@@ -1937,6 +2519,46 @@ export default function GameUI({
         @keyframes offer-collapse-move {
           from { transform: translate(0, 0); }
           to { transform: translate(${OFFER_DEAL_ORIGIN.x}px, ${OFFER_DEAL_ORIGIN.y}px); }
+        }
+        @keyframes damage-flash {
+          0% { opacity: 0; }
+          15% { opacity: 1; }
+          100% { opacity: 0; }
+        }
+        @keyframes freeze-flash {
+          0% { opacity: 0; transform: scale(0.92); }
+          20% { opacity: 1; transform: scale(1); }
+          65% { opacity: 1; transform: scale(1); }
+          100% { opacity: 0; transform: scale(1.04); }
+        }
+        @keyframes card-value-pop-out {
+          0% { opacity: 1; transform: scale(1); }
+          40% { opacity: 1; transform: scale(1.3); }
+          100% { opacity: 0; transform: scale(1.5); }
+        }
+        @keyframes card-value-pop-in {
+          0% { opacity: 0; transform: scale(0.4); }
+          60% { opacity: 1; transform: scale(1.25); }
+          100% { opacity: 1; transform: scale(1); }
+        }
+        @keyframes card-damage-badge {
+          0% { opacity: 0; transform: translateY(0) scale(0.6); }
+          20% { opacity: 1; transform: translateY(-6px) scale(1.25); }
+          35% { opacity: 1; transform: translateY(-10px) scale(1); }
+          100% { opacity: 0; transform: translateY(-34px) scale(1); }
+        }
+        @keyframes damage-shake {
+          0% { transform: translate(0, 0); }
+          10% { transform: translate(-10px, -6px); }
+          20% { transform: translate(9px, 7px); }
+          30% { transform: translate(-8px, 4px); }
+          40% { transform: translate(7px, -6px); }
+          50% { transform: translate(-6px, 3px); }
+          60% { transform: translate(5px, -4px); }
+          70% { transform: translate(-4px, 2px); }
+          80% { transform: translate(3px, -2px); }
+          90% { transform: translate(-2px, 1px); }
+          100% { transform: translate(0, 0); }
         }
       `}</style>
     </div>

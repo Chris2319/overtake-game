@@ -139,15 +139,127 @@ function createGlassMesh(
   mesh.add(outline);
   mesh.userData.outline = outline;
   mesh.userData.idleOutlineColor = outline.material.color.clone();
+  // Kept alongside `idleOutlineColor` (which a frozen hazard mutates while
+  // active — see the `state.frozenTiles`-driven effect below) so a tile can
+  // be restored to its own genuine idle color once the hazard clears,
+  // rather than a fixed "freeze" color that wouldn't fit every tile type.
+  mesh.userData.baseOutlineColor = outline.material.color.clone();
   return mesh;
+}
+
+/** Trailing exhaust particles left behind a moving player token — spawned
+ * from the hover ring while the token is mid-hop, in that player's own glow
+ * color, fading out and shrinking over their short lifetime. Each player
+ * gets a fixed-size ring-buffer point cloud (see `createTrailSystem`)
+ * rather than spawning/destroying individual objects, so the cost stays flat
+ * regardless of how long a game runs. */
+const TRAIL_MAX_PARTICLES = 18;
+const TRAIL_SPAWN_INTERVAL_MS = 55;
+const TRAIL_PARTICLE_LIFETIME_MS = 320;
+const TRAIL_PARTICLE_SIZE_START = 7;
+const TRAIL_PARTICLE_SIZE_END = 1;
+
+interface TrailSystem {
+  points: THREE.Points;
+  positions: Float32Array;
+  ages: Float32Array;
+  positionAttr: THREE.BufferAttribute;
+  ageAttr: THREE.BufferAttribute;
+  nextIndex: number;
+  spawnTimer: number;
+  /** Local-space offset (from the token group's origin) this trail spawns
+   * from each tick, e.g. one of the twin stabilizer fins — so a token leaves
+   * a pair of side-by-side trails rather than one down its center. */
+  localOffset: THREE.Vector3;
+}
+
+/** One token spawns a trail from each of these local-space points — the
+ * left/right stabilizer fins (see their placement in `createPlayerToken`,
+ * `±r * 1.0` on X) — so it leaves a pair of engine-exhaust-style trails
+ * instead of a single center one. */
+const TRAIL_LOCAL_OFFSETS: [number, number, number][] = [
+  [-TOKEN_RADIUS * 1.0, -TOKEN_RADIUS * 0.9, 0],
+  [TOKEN_RADIUS * 1.0, -TOKEN_RADIUS * 0.9, 0],
+];
+
+/** Builds one player's exhaust-trail point cloud: a fixed pool of
+ * `TRAIL_MAX_PARTICLES` points, all parked (age = lifetime, invisible) until
+ * `spawnTrailParticle` recycles the oldest slot into a fresh particle at the
+ * token's current position. Positions are world-space and the points object
+ * is added directly to the scene (not parented to the token), so a particle
+ * stays put where it was dropped instead of riding along with the token. */
+function createTrailSystem(color: number, localOffset: THREE.Vector3): TrailSystem {
+  const positions = new Float32Array(TRAIL_MAX_PARTICLES * 3);
+  const ages = new Float32Array(TRAIL_MAX_PARTICLES).fill(TRAIL_PARTICLE_LIFETIME_MS);
+
+  const geometry = new THREE.BufferGeometry();
+  const positionAttr = new THREE.BufferAttribute(positions, 3);
+  positionAttr.setUsage(THREE.DynamicDrawUsage);
+  const ageAttr = new THREE.BufferAttribute(ages, 1);
+  ageAttr.setUsage(THREE.DynamicDrawUsage);
+  geometry.setAttribute("position", positionAttr);
+  geometry.setAttribute("aAge", ageAttr);
+
+  const material = new THREE.ShaderMaterial({
+    uniforms: {
+      uColor: { value: new THREE.Color(color) },
+      uLifetime: { value: TRAIL_PARTICLE_LIFETIME_MS },
+      uSizeStart: { value: TRAIL_PARTICLE_SIZE_START },
+      uSizeEnd: { value: TRAIL_PARTICLE_SIZE_END },
+    },
+    vertexShader: `
+      attribute float aAge;
+      varying float vAgeT;
+      uniform float uLifetime;
+      uniform float uSizeStart;
+      uniform float uSizeEnd;
+      void main() {
+        vAgeT = clamp(aAge / uLifetime, 0.0, 1.0);
+        vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+        float size = mix(uSizeStart, uSizeEnd, vAgeT);
+        gl_PointSize = size * (300.0 / -mvPosition.z);
+        gl_Position = projectionMatrix * mvPosition;
+      }
+    `,
+    fragmentShader: `
+      varying float vAgeT;
+      uniform vec3 uColor;
+      void main() {
+        if (vAgeT >= 1.0) discard;
+        float d = length(gl_PointCoord - vec2(0.5));
+        if (d > 0.5) discard;
+        float alpha = (1.0 - vAgeT) * smoothstep(0.5, 0.0, d);
+        gl_FragColor = vec4(uColor, alpha * 0.35);
+      }
+    `,
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+  });
+
+  const points = new THREE.Points(geometry, material);
+  points.frustumCulled = false;
+
+  return { points, positions, ages, positionAttr, ageAttr, nextIndex: 0, spawnTimer: 0, localOffset };
+}
+
+/** Recycles the oldest slot in a trail's ring buffer into a fresh particle
+ * dropped at `pos`. */
+function spawnTrailParticle(trail: TrailSystem, pos: THREE.Vector3) {
+  const idx = trail.nextIndex;
+  trail.positions[idx * 3] = pos.x;
+  trail.positions[idx * 3 + 1] = pos.y;
+  trail.positions[idx * 3 + 2] = pos.z;
+  trail.ages[idx] = 0;
+  trail.nextIndex = (idx + 1) % TRAIL_MAX_PARTICLES;
 }
 
 /** How much brighter (and bigger) the hover ring under the current player's
  * token glows compared to its idle state, so it's obvious which token is
  * about to move without adding any new geometry to the scene. Pulses gently
  * rather than sitting at a flat boosted value, to draw the eye. */
-const RING_INTENSITY_IDLE = 1.4;
-const RING_INTENSITY_ACTIVE = 3.2;
+const RING_INTENSITY_IDLE = 1.0;
+const RING_INTENSITY_ACTIVE = 2.4;
 const RING_PULSE_AMPLITUDE = 0.8;
 const RING_PULSE_SPEED = 3.2;
 const RING_SCALE_ACTIVE = 1.35;
@@ -166,16 +278,16 @@ function createPlayerToken(initialColor: number): THREE.Group {
   const r = TOKEN_RADIUS;
   const group = new THREE.Group();
 
-  // A small emissive tint keeps the chassis readable as a dark-metal shape
-  // even in this scene's deliberately dim ambient/directional light (see the
-  // comment above where those are added) — pure black plus near-black
-  // lighting was reading as an almost invisible void, with only the glowing
-  // visor/band/ring visible.
+  // A dark slate tint (rather than a near-black one) keeps the chassis
+  // readable as a metal shape even in this scene's deliberately dim
+  // ambient/directional light (see the comment above where those are
+  // added) — plain near-black was reading as a faded, bloomed-out void
+  // under the bloom pass, with only the glowing visor/band/ring visible.
   const bodyMat = new THREE.MeshStandardMaterial({
-    color: 0x2a2e38,
-    emissive: 0x14161c,
-    emissiveIntensity: 0.6,
-    roughness: 0.35,
+    color: 0x454b5c,
+    emissive: 0x1c2029,
+    emissiveIntensity: 0.4,
+    roughness: 0.4,
     metalness: 0.6,
   });
   const body = new THREE.Mesh(new THREE.SphereGeometry(r, 32, 24), bodyMat);
@@ -184,7 +296,7 @@ function createPlayerToken(initialColor: number): THREE.Group {
   const glowMat = new THREE.MeshStandardMaterial({
     color: initialColor,
     emissive: initialColor,
-    emissiveIntensity: 1.4,
+    emissiveIntensity: 1.0,
     roughness: 0.3,
     metalness: 0.1,
   });
@@ -213,13 +325,22 @@ function createPlayerToken(initialColor: number): THREE.Group {
   ring.position.y = -r * 1.05;
   group.add(ring);
 
-  // A pair of small angled stabilizer fins, dark like the body.
+  // A pair of small angled stabilizer fins. Given their own pale metallic
+  // material (rather than sharing the dark bodyMat) so they read as a
+  // distinct accent piece instead of blending into the chassis.
+  const finMat = new THREE.MeshStandardMaterial({
+    color: 0xc7ccd6,
+    emissive: 0x30333c,
+    emissiveIntensity: 0.3,
+    roughness: 0.3,
+    metalness: 0.8,
+  });
   const finGeo = new THREE.BoxGeometry(r * 0.5, r * 0.1, r * 0.3);
-  const finLeft = new THREE.Mesh(finGeo, bodyMat);
+  const finLeft = new THREE.Mesh(finGeo, finMat);
   finLeft.position.set(-r * 1.0, r * 0.05, 0);
   finLeft.rotation.z = Math.PI * 0.12;
   group.add(finLeft);
-  const finRight = new THREE.Mesh(finGeo, bodyMat);
+  const finRight = new THREE.Mesh(finGeo, finMat);
   finRight.position.set(r * 1.0, r * 0.05, 0);
   finRight.rotation.z = -Math.PI * 0.12;
   group.add(finRight);
@@ -278,6 +399,12 @@ const STAIR_COLOR = 0x22e3ff;
 const TRAPDOOR_COLOR = 0xff2d95;
 const ABILITY_COLOR = 0xe6ff2e;
 const DAMAGE_COLOR = 0xff5a1f;
+/** A "freeze" card play turns whatever tile the mover was standing on into a
+ * standing hazard (see `GameState.frozenTiles`) — any ordinary tile's
+ * outline brightens to this color while it's active, without changing
+ * geometry (see the `state.frozenTiles`-driven effect below), then eases
+ * back to that tile's own normal color once the hazard clears. */
+const FROZEN_HAZARD_COLOR = 0xe8fbff;
 /** Landing-bounce bloom colors: an ordinary tile's outline flashes to one of
  * these (alternating by column, same as the old alternating tile fill did)
  * instead of just brightening its own grey — the tile stays black at rest
@@ -527,6 +654,7 @@ export default function Scene({ state, handleRef, onOrbitModeChange }: SceneProp
   const laddersRef = useRef(new Map<string, StairFlight>());
   const rowStairsRef = useRef(new Map<string, StairFlight>());
   const playerMeshesRef = useRef(new Map<PlayerId, THREE.Group>());
+  const trailSystemsRef = useRef(new Map<PlayerId, TrailSystem[]>());
   const activeJobsRef = useRef<AnimationJob[]>([]);
   const tileBounceJobsRef = useRef<TileBounceJob[]>([]);
   const trapdoorPanelsRef = useRef(new Map<string, TrapdoorPanels>());
@@ -574,7 +702,7 @@ export default function Scene({ state, handleRef, onOrbitModeChange }: SceneProp
     composer.addPass(new RenderPass(scene, camera));
     const bloomPass = new UnrealBloomPass(
       new THREE.Vector2(container.clientWidth, container.clientHeight),
-      1.4,
+      1.0,
       0.22,
       0.32,
     );
@@ -944,11 +1072,21 @@ export default function Scene({ state, handleRef, onOrbitModeChange }: SceneProp
       if (row !== undefined) faceDirection(mesh, rowFacingX(row), 0);
     };
 
+    const trailSystems = trailSystemsRef.current;
+    trailSystems.clear();
+
     initialState.players.forEach((player, i) => {
       const mesh = createPlayerToken(player.color);
       placePlayerAtTile(mesh, player.currentTileId, i, initialState.players.length);
       scene.add(mesh);
       playerMeshes.set(player.id, mesh);
+
+      const trails = TRAIL_LOCAL_OFFSETS.map((offset) => {
+        const trail = createTrailSystem(player.color, new THREE.Vector3(...offset));
+        scene.add(trail.points);
+        return trail;
+      });
+      trailSystems.set(player.id, trails);
     });
 
     const activeJobs = activeJobsRef.current;
@@ -1223,6 +1361,36 @@ export default function Scene({ state, handleRef, onOrbitModeChange }: SceneProp
         }
       }
 
+      // Exhaust trail: while a player's token is mid-hop, periodically drop
+      // a particle at its current (bounced/looped) position; every trail's
+      // particles keep aging (and fading) regardless of whether their owner
+      // is currently moving, so a token that just stopped still leaves its
+      // last few particles to fade out naturally instead of vanishing.
+      const trailSpawnPos = new THREE.Vector3();
+      for (const [playerId, trails] of trailSystems) {
+        const mesh = playerMeshes.get(playerId);
+        const isMoving = activeJobs.some((j) => j.playerId === playerId);
+        for (const trail of trails) {
+          if (mesh && isMoving) {
+            trail.spawnTimer += dt;
+            while (trail.spawnTimer >= TRAIL_SPAWN_INTERVAL_MS) {
+              trail.spawnTimer -= TRAIL_SPAWN_INTERVAL_MS;
+              mesh.updateWorldMatrix(true, false);
+              trailSpawnPos.copy(trail.localOffset);
+              mesh.localToWorld(trailSpawnPos);
+              spawnTrailParticle(trail, trailSpawnPos);
+            }
+          } else {
+            trail.spawnTimer = 0;
+          }
+          for (let i = 0; i < TRAIL_MAX_PARTICLES; i++) {
+            if (trail.ages[i] < TRAIL_PARTICLE_LIFETIME_MS) trail.ages[i] += dt;
+          }
+          trail.positionAttr.needsUpdate = true;
+          trail.ageAttr.needsUpdate = true;
+        }
+      }
+
       // Tiles press down slightly and spring back when a player lands on
       // them, independent of the token's own hop arc.
       for (let i = tileBounceJobs.length - 1; i >= 0; i--) {
@@ -1417,6 +1585,12 @@ export default function Scene({ state, handleRef, onOrbitModeChange }: SceneProp
           }
         }
       });
+      for (const trails of trailSystems.values()) {
+        for (const trail of trails) {
+          trail.points.geometry.dispose();
+          (trail.points.material as THREE.Material).dispose();
+        }
+      }
       composer.dispose();
       renderer.dispose();
       handleRef.current = null;
@@ -1432,6 +1606,7 @@ export default function Scene({ state, handleRef, onOrbitModeChange }: SceneProp
     const tileWorldPositions = tileWorldPositionsRef.current;
     const tileRows = tileRowsRef.current;
     const playerMeshes = playerMeshesRef.current;
+    const trailSystems = trailSystemsRef.current;
     const activeJobs = activeJobsRef.current;
     const total = state.players.length;
 
@@ -1440,6 +1615,9 @@ export default function Scene({ state, handleRef, onOrbitModeChange }: SceneProp
       if (!mesh) return;
 
       (mesh.userData.setColor as (color: number) => void)(player.color);
+      for (const trail of trailSystems.get(player.id) ?? []) {
+        (trail.points.material as THREE.ShaderMaterial).uniforms.uColor.value.set(player.color);
+      }
 
       if (activeJobs.some((j) => j.playerId === player.id)) return;
       const base = tileWorldPositions.get(player.currentTileId);
@@ -1450,6 +1628,41 @@ export default function Scene({ state, handleRef, onOrbitModeChange }: SceneProp
       if (row !== undefined) faceDirection(mesh, rowFacingX(row), 0);
     });
   }, [state]);
+
+  // Brightens whichever tile a "freeze" card just planted a hazard on (in
+  // `state.frozenTiles`) and eases it back to its own normal color once the
+  // hazard clears — the same outline/idleOutlineColor userData every tile
+  // already carries, just recolored, so no extra geometry is needed to make
+  // "this one currently costs a turn" readable at a glance.
+  const frozenHazardTileIdsRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const tileMeshes = tileMeshesRef.current;
+    const prev = frozenHazardTileIdsRef.current;
+    const next = new Set(state.frozenTiles);
+
+    for (const tileId of next) {
+      if (prev.has(tileId)) continue;
+      const mesh = tileMeshes.get(tileId);
+      const outline = mesh?.userData.outline as THREE.LineSegments | undefined;
+      if (!mesh || !outline) continue;
+      const material = outline.material as THREE.LineBasicMaterial;
+      material.color.set(FROZEN_HAZARD_COLOR);
+      material.opacity = TILE_EDGE_OPACITY_BOUNCE_PEAK;
+      mesh.userData.idleOutlineColor = material.color.clone();
+    }
+    for (const tileId of prev) {
+      if (next.has(tileId)) continue;
+      const mesh = tileMeshes.get(tileId);
+      const outline = mesh?.userData.outline as THREE.LineSegments | undefined;
+      const baseColor = mesh?.userData.baseOutlineColor as THREE.Color | undefined;
+      if (!mesh || !outline || !baseColor) continue;
+      const material = outline.material as THREE.LineBasicMaterial;
+      material.color.copy(baseColor);
+      material.opacity = TILE_EDGE_OPACITY_IDLE;
+      mesh.userData.idleOutlineColor = baseColor.clone();
+    }
+    frozenHazardTileIdsRef.current = next;
+  }, [state.frozenTiles]);
 
   return <div ref={containerRef} style={{ width: "100%", height: "100%" }} />;
 }
