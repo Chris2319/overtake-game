@@ -6,7 +6,8 @@
     "dev": "tsx \"./src/app/(backend)/api/server.ts\"",
     "build": "next build",
     "start": "NODE_ENV=production tsx \"./src/app/(backend)/api/server.ts\"",
-    "lint": "eslint"
+    "lint": "eslint",
+    "multiplayer": "scripts/launch-multiplayer.sh"
   },
   "dependencies": {
     "gsap": "^3.15.0",

@@ -251,7 +251,7 @@ function TrapCardFace({ card, color }: { card: Card; color: string }) {
       <circle cx={cut + 42} cy={14} r={2} fill={color} fillOpacity={0.7} />
       <path d={`M ${w - 6} ${h - cut - 10} v -22 l -8 -8`} fill="none" stroke={color} strokeOpacity={0.4} strokeWidth={1.5} />
       {/* label, top-left */}
-      <text x={14} y={30} fontSize={15} fontWeight={700} fontFamily="sans-serif" fill={color}>
+      <text x={14} y={30} fontSize={15} fontWeight={700} fontFamily="var(--font-retro)" fill={color}>
         {cardLabel(card)}
       </text>
       {/* the trap grid icon, centered */}
@@ -269,10 +269,10 @@ function TrapCardFace({ card, color }: { card: Card; color: string }) {
         })}
       </g>
       {/* name, bottom */}
-      <text x={w / 2} y={h - 40} fontSize={13} fontWeight={800} fontFamily="sans-serif" fill={color} textAnchor="middle">
+      <text x={w / 2} y={h - 40} fontSize={13} fontWeight={800} fontFamily="var(--font-retro)" fill={color} textAnchor="middle">
         {mode === "row" ? "ROW TRAP" : "COLUMN TRAP"}
       </text>
-      <text x={w / 2} y={h - 22} fontSize={9} fontWeight={600} fontFamily="sans-serif" fill={color} opacity={0.7} textAnchor="middle">
+      <text x={w / 2} y={h - 22} fontSize={9} fontWeight={600} fontFamily="var(--font-retro)" fill={color} opacity={0.7} textAnchor="middle">
         Drops the whole {mode}
       </text>
       {/* corner dots, bottom-right */}
@@ -340,7 +340,7 @@ function FreezeCardFace({ card, color }: { card: Card; color: string }) {
       <circle cx={cut + 42} cy={14} r={2} fill={color} fillOpacity={0.7} />
       <path d={`M ${w - 6} ${h - cut - 10} v -22 l -8 -8`} fill="none" stroke={color} strokeOpacity={0.4} strokeWidth={1.5} />
       {/* label, top-left */}
-      <text x={14} y={30} fontSize={15} fontWeight={700} fontFamily="sans-serif" fill={color}>
+      <text x={14} y={30} fontSize={15} fontWeight={700} fontFamily="var(--font-retro)" fill={color}>
         {cardLabel(card)}
       </text>
       {/* the snowflake icon, centered */}
@@ -358,10 +358,10 @@ function FreezeCardFace({ card, color }: { card: Card; color: string }) {
         })}
       </g>
       {/* name, bottom */}
-      <text x={w / 2} y={h - 40} fontSize={13} fontWeight={800} fontFamily="sans-serif" fill={color} textAnchor="middle">
+      <text x={w / 2} y={h - 40} fontSize={13} fontWeight={800} fontFamily="var(--font-retro)" fill={color} textAnchor="middle">
         FREEZE
       </text>
-      <text x={w / 2} y={h - 22} fontSize={9} fontWeight={600} fontFamily="sans-serif" fill={color} opacity={0.7} textAnchor="middle">
+      <text x={w / 2} y={h - 22} fontSize={9} fontWeight={600} fontFamily="var(--font-retro)" fill={color} opacity={0.7} textAnchor="middle">
         Move 1, freeze tile behind
       </text>
       {/* corner dots, bottom-right */}
@@ -424,7 +424,7 @@ function CardFace({
       <circle cx={cut + 42} cy={14} r={2} fill={color} fillOpacity={0.7} />
       <path d={`M ${w - 6} ${h - cut - 10} v -22 l -8 -8`} fill="none" stroke={color} strokeOpacity={0.4} strokeWidth={1.5} />
       {/* value label, top-left */}
-      <text x={14} y={30} fontSize={15} fontWeight={700} fontFamily="sans-serif" fill={color}>
+      <text x={14} y={30} fontSize={15} fontWeight={700} fontFamily="var(--font-retro)" fill={color}>
         {cardLabel(card)}
       </text>
       {/* big readout — a plain static label normally, or (right after a
@@ -437,7 +437,7 @@ function CardFace({
             y={h * 0.42}
             fontSize={CARD_FONT_SIZE}
             fontWeight={800}
-            fontFamily="sans-serif"
+            fontFamily="var(--font-retro)"
             fill={color}
             textAnchor="middle"
             dominantBaseline="middle"
@@ -454,7 +454,7 @@ function CardFace({
             y={h * 0.42}
             fontSize={CARD_FONT_SIZE}
             fontWeight={800}
-            fontFamily="sans-serif"
+            fontFamily="var(--font-retro)"
             fill={color}
             textAnchor="middle"
             dominantBaseline="middle"
@@ -472,7 +472,7 @@ function CardFace({
             y={h * 0.42 - 34}
             fontSize={20}
             fontWeight={800}
-            fontFamily="sans-serif"
+            fontFamily="var(--font-retro)"
             fill="#ff2d95"
             textAnchor="middle"
             dominantBaseline="middle"
@@ -492,7 +492,7 @@ function CardFace({
           y={h * 0.42}
           fontSize={CARD_FONT_SIZE}
           fontWeight={800}
-          fontFamily="sans-serif"
+          fontFamily="var(--font-retro)"
           fill={color}
           textAnchor="middle"
           dominantBaseline="middle"
@@ -872,6 +872,7 @@ function CardOfferFan({
               }}
             >
               <button
+                data-card-id={card.id}
                 onClick={() => onToggle(card)}
                 disabled={disabled}
                 className={`offer-deal-card offer-card-button${resolving ? " offer-collapse-card" : ""}`}
@@ -1432,6 +1433,7 @@ function CameraControls({
         gap: 8,
         padding: "16px 8px 14px",
         boxShadow: "0 0 10px rgba(34, 227, 255, 0.35), inset 0 0 8px rgba(34, 227, 255, 0.15)",
+        pointerEvents: "auto",
       }}
     >
       {/* chamfered-corner HUD frame — same clipped-corner language as the card frames */}
@@ -1554,6 +1556,7 @@ function FullscreenButton() {
         zIndex: 20,
         padding: "10px 8px",
         boxShadow: "0 0 10px rgba(34, 227, 255, 0.35), inset 0 0 8px rgba(34, 227, 255, 0.15)",
+        pointerEvents: "auto",
       }}
     >
       {/* chamfered-corner HUD frame — same clipped-corner language as the card frames */}
@@ -1623,8 +1626,8 @@ function TeamStatsPanel({
         flexDirection: "column",
         gap: 12,
         padding: "16px 16px 14px",
-        fontFamily: "sans-serif",
-        width: 200,
+        fontFamily: "var(--font-retro)",
+        width: 230,
         boxShadow: "0 0 14px rgba(34, 227, 255, 0.2), inset 0 0 10px rgba(34, 227, 255, 0.08)",
       }}
     >
@@ -1683,14 +1686,16 @@ function TeamStatsPanel({
                 letterSpacing: "0.12em",
                 textTransform: "uppercase",
                 textShadow: `0 0 8px ${teamHex}`,
+                whiteSpace: "nowrap",
+                flexShrink: 0,
               }}
             >
               {team.name}
             </span>
-            <span style={{ marginLeft: "auto", color: "white", fontSize: 14, fontWeight: 700 }}>
+            <span style={{ marginLeft: "auto", color: "white", fontSize: 14, fontWeight: 700, whiteSpace: "nowrap", flexShrink: 0 }}>
               {finishedCount} / {roster.length}
             </span>
-            {active && <span style={{ color: teamHex, fontSize: 13, lineHeight: 1 }}>›</span>}
+            {active && <span style={{ color: teamHex, fontSize: 13, lineHeight: 1, flexShrink: 0 }}>›</span>}
           </div>
         );
       })}
@@ -1877,6 +1882,86 @@ function DeckPile({
   );
 }
 
+type StartPhase = "countdown" | "hud-off" | "flicker" | "hud-on";
+
+const START_COUNTDOWN_SECONDS = 3;
+const START_HUD_OFF_HOLD_MS = 500;
+const START_HUD_FLICKER_MS = 700;
+/** Held past the HUD starting to flicker on before the scene itself (its
+ * background and the tiles falling into place) begins — so the HUD visibly
+ * leads the reveal instead of both powering on in the same beat. */
+const SCENE_REVEAL_DELAY_MS = 500;
+/** How long the scene's background takes to fade from fully transparent to
+ * visible once revealed — the tiles' own fall (`Scene.playTileDropIn`) plays
+ * on top of this. */
+const SCENE_FADE_MS = 900;
+
+/** Full-screen "Game starting in 3..2..1" overlay shown the moment `GameUI`
+ * mounts, before the HUD or scene appear at all — see the `startPhase`
+ * sequence in `GameUI` below. */
+function StartCountdownOverlay({ onDone }: { onDone: () => void }) {
+  const [count, setCount] = useState(START_COUNTDOWN_SECONDS);
+  const onDoneRef = useRef(onDone);
+  useEffect(() => {
+    onDoneRef.current = onDone;
+  });
+
+  useEffect(() => {
+    if (count <= 1) {
+      const timer = setTimeout(() => onDoneRef.current(), 1000);
+      return () => clearTimeout(timer);
+    }
+    const timer = setTimeout(() => setCount((c) => c - 1), 1000);
+    return () => clearTimeout(timer);
+  }, [count]);
+
+  return (
+    <div
+      style={{
+        position: "fixed",
+        inset: 0,
+        zIndex: 100,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        background: "#020309",
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          gap: 12,
+        }}
+      >
+        <div
+          style={{
+            fontFamily: "var(--font-retro)",
+            fontSize: 28,
+            color: "#22e3ff",
+            textShadow: "0 0 8px #22e3ff, 0 0 20px rgba(34, 227, 255, 0.6), 0 0 40px rgba(34, 227, 255, 0.35)",
+            letterSpacing: "0.05em",
+          }}
+        >
+          Game starting in
+        </div>
+        <div
+          style={{
+            fontFamily: "var(--font-retro)",
+            fontSize: 72,
+            color: "#22e3ff",
+            textShadow: "0 0 8px #22e3ff, 0 0 20px rgba(34, 227, 255, 0.6), 0 0 40px rgba(34, 227, 255, 0.35)",
+            letterSpacing: "0.05em",
+          }}
+        >
+          {count}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /** Who played the card that's arriving in the next `card_played` broadcast,
  * set right before this client sends `play_card`/`select_retreat_target` so
  * the handler for that broadcast knows to run the local hand-card-fly
@@ -1949,6 +2034,35 @@ export default function GameUI({
   // fall begins rather than at card-grow time (which could be a while
   // before the server round-trip resolves).
   const pendingTrapTileIdsRef = useRef<string[] | null>(null);
+
+  // Game-start intro: countdown, then the HUD powers on (off -> flicker ->
+  // on) while the scene stays hidden. `GameUI` only ever mounts once per
+  // game (no reconnect/resume), so this can just run once on mount rather
+  // than being driven by a prop from the route page.
+  const [startPhase, setStartPhase] = useState<StartPhase>("countdown");
+  useEffect(() => {
+    if (startPhase !== "hud-off") return;
+    const timer = setTimeout(() => setStartPhase("flicker"), START_HUD_OFF_HOLD_MS);
+    return () => clearTimeout(timer);
+  }, [startPhase]);
+  // Scene reveal: once the HUD starts powering on, wait a beat (so the HUD
+  // visibly leads) then fade the scene's background in and kick off every
+  // tile's fall-into-place (see `Scene.playTileDropIn`), rather than having
+  // the whole scene snap into view already assembled.
+  const [sceneRevealed, setSceneRevealed] = useState(false);
+  useEffect(() => {
+    if (startPhase !== "flicker") return;
+    const timer = setTimeout(() => {
+      setSceneRevealed(true);
+      sceneHandleRef.current?.playTileDropIn();
+    }, SCENE_REVEAL_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, [startPhase]);
+  useEffect(() => {
+    if (startPhase !== "flicker") return;
+    const timer = setTimeout(() => setStartPhase("hud-on"), START_HUD_FLICKER_MS);
+    return () => clearTimeout(timer);
+  }, [startPhase]);
 
   useEffect(() => {
     if (!burst) return;
@@ -2293,6 +2407,34 @@ export default function GameUI({
     send({ action: "select_retreat_target", teamId });
   };
 
+  // Recording-only shortcuts: number keys 1-5 stand in for clicking a card
+  // by hand position, so a demo can be played from the keyboard without the
+  // mouse cursor showing up on screen. In the card-offer overlay they pick
+  // from the offered fan instead of the hand, mirroring whichever row is
+  // actually on screen.
+  useEffect(() => {
+    const handleCardShortcut = (e: KeyboardEvent) => {
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const index = Number(e.key) - 1;
+      if (!(index >= 0 && index <= 4)) return;
+      const target = e.target as HTMLElement | null;
+      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) return;
+
+      if (state.cardOffer && controlledPlayerIds.includes(state.cardOffer.playerId)) {
+        const card = state.cardOffer.offered[index];
+        if (card) handleToggleOfferCard(card);
+        return;
+      }
+
+      const card = myPlayer.hand[index];
+      if (!card) return;
+      const buttonEl = document.querySelector<HTMLButtonElement>(`button.game-card[data-card-id="${card.id}"]`);
+      if (buttonEl) handlePlayCard(card, buttonEl);
+    };
+    window.addEventListener("keydown", handleCardShortcut);
+    return () => window.removeEventListener("keydown", handleCardShortcut);
+  }, [state.cardOffer, controlledPlayerIds, myPlayer, handleToggleOfferCard, handlePlayCard]);
+
   return (
     <div
       style={{
@@ -2305,7 +2447,39 @@ export default function GameUI({
       }}
     >
       <div ref={sceneShakeRef} style={{ position: "relative", flex: 1, minHeight: 0 }}>
-        <Scene state={state} handleRef={sceneHandleRef} onOrbitModeChange={setOrbitMode} />
+        {/* Scene stays hidden through the countdown, the HUD's dark "off"
+            hold, and the start of its flicker — it's still mounted (just at
+            opacity 0) so Three.js can initialize in the background. Once
+            `sceneRevealed` flips (a beat after the HUD starts flickering on,
+            see the effect above), its background fades in over
+            `SCENE_FADE_MS` while the tiles fall into place on top of it
+            (`playTileDropIn`), rather than the whole scene snapping into
+            view already assembled. */}
+        <div
+          className="scene-layer"
+          style={{
+            position: "absolute",
+            inset: 0,
+            opacity: sceneRevealed ? 1 : 0,
+            transition: `opacity ${SCENE_FADE_MS}ms ease`,
+            // Was hardcoded "none", which permanently blocked mouse drag/
+            // scroll from ever reaching the OrbitControls canvas beneath —
+            // only interactive before the reveal finishes (still fading in
+            // over the countdown overlay).
+            pointerEvents: sceneRevealed ? "auto" : "none",
+          }}
+        >
+          <Scene state={state} handleRef={sceneHandleRef} onOrbitModeChange={setOrbitMode} />
+        </div>
+        {startPhase === "countdown" && (
+          <StartCountdownOverlay onDone={() => setStartPhase("hud-off")} />
+        )}
+        {startPhase !== "countdown" && (
+        <div
+          className="hud-layer"
+          data-power={startPhase === "flicker" ? "flicker" : startPhase === "hud-on" ? "on" : "off"}
+          style={{ position: "absolute", inset: 0, pointerEvents: "none" }}
+        >
         {damageFlash !== null && <DamageFlashOverlay key={damageFlash} />}
         <FrozenStatusOverlay visible={isControlledPlayerFrozen} />
         {freezeFlash !== null && <FreezeFlashOverlay key={freezeFlash} />}
@@ -2349,6 +2523,7 @@ export default function GameUI({
             padding: "0 24px 24px",
             background:
               "linear-gradient(to top, rgba(6, 12, 24, 0.92) 0%, rgba(6, 12, 24, 0.75) 30%, rgba(6, 12, 24, 0) 70%)",
+            pointerEvents: "auto",
           }}
         >
           <div style={{ alignSelf: "flex-end", position: "relative", transform: "translate(16px, -16px)" }}>
@@ -2384,6 +2559,7 @@ export default function GameUI({
                   <button
                     key={card.id}
                     className="game-card"
+                    data-card-id={card.id}
                     onClick={(e) => handlePlayCard(card, e.currentTarget)}
                     disabled={locked}
                     style={{
@@ -2423,6 +2599,8 @@ export default function GameUI({
           </div>
         </div>
       )}
+        </div>
+        )}
       </div>
       {cardAnim && <CardPlayOverlay anim={cardAnim} />}
       {cardAnim?.phase === "await-target" && (
@@ -2445,6 +2623,29 @@ export default function GameUI({
       )}
       {burst && <ParticleBurst burst={burst} />}
       <style>{`
+        .hud-layer[data-power="off"] {
+          filter: grayscale(1) brightness(0.35) contrast(0.9);
+          opacity: 0.55;
+        }
+        .hud-layer[data-power="flicker"] {
+          animation: hud-power-flicker ${START_HUD_FLICKER_MS}ms steps(1, end) both;
+        }
+        .hud-layer[data-power="on"] {
+          filter: none;
+          opacity: 1;
+          transition: filter 0.4s ease, opacity 0.4s ease;
+        }
+        @keyframes hud-power-flicker {
+          0%   { filter: grayscale(1) brightness(0.35); opacity: 0.5; }
+          8%   { filter: none; opacity: 1; }
+          15%  { filter: grayscale(1) brightness(0.35); opacity: 0.5; }
+          24%  { filter: none; opacity: 1; }
+          30%  { filter: grayscale(1) brightness(0.3); opacity: 0.4; }
+          45%  { filter: none; opacity: 1; }
+          55%  { filter: grayscale(1) brightness(0.3); opacity: 0.45; }
+          65%  { filter: none; opacity: 1; }
+          100% { filter: none; opacity: 1; }
+        }
         .game-card {
           --lift: 0px;
           transform: translateY(var(--lift)) rotate(var(--rotate-z, 0deg));

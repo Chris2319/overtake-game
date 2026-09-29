@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { Geist, Geist_Mono, Press_Start_2P } from "next/font/google";
 import { WsProvider } from "@/lib/ws";
 import { GameSessionProvider } from "@/lib/gameSession";
 import "./globals.css";
@@ -14,6 +14,12 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
+const pressStart2P = Press_Start_2P({
+  variable: "--font-retro",
+  weight: "400",
+  subsets: ["latin"],
+});
+
 export const metadata: Metadata = {
   title: "Overtake",
   description: "A card-driven board race game.",
@@ -21,7 +27,7 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
-    <html lang="en" className={`${geistSans.variable} ${geistMono.variable}`}>
+    <html lang="en" className={`${geistSans.variable} ${geistMono.variable} ${pressStart2P.variable}`}>
       <body>
         <WsProvider>
           <GameSessionProvider>{children}</GameSessionProvider>

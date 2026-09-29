@@ -5,15 +5,19 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="3a45f6a1-8fe9-4b10-9878-3af596d09412" name="Changes" comment="updates">
+      <change afterPath="$PROJECT_DIR$/public/gameplay/clip-1.mp4" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/public/gameplay/clip-2.mp4" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/public/gameplay/clip-3.mp4" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/public/gameplay/clip-4.mp4" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/public/metal.png" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/public/metal2.png" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/app/(backend)/api/server.ts" beforeDir="false" afterPath="$PROJECT_DIR$/src/app/(backend)/api/server.ts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/package.json" beforeDir="false" afterPath="$PROJECT_DIR$/package.json" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/app/game/GameUI.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/src/app/game/GameUI.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/app/game/LobbySeatGrid.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/src/app/game/LobbySeatGrid.tsx" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/app/game/Scene.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/src/app/game/Scene.tsx" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/app/game/[id]/page.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/src/app/game/[id]/page.tsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/app/layout.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/src/app/layout.tsx" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/app/page.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/src/app/page.tsx" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/lib/game/engine.ts" beforeDir="false" afterPath="$PROJECT_DIR$/src/lib/game/engine.ts" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/lib/game/types.ts" beforeDir="false" afterPath="$PROJECT_DIR$/src/lib/game/types.ts" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/lib/gameSession.tsx" beforeDir="false" afterPath="$PROJECT_DIR$/src/lib/gameSession.tsx" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -23,6 +27,18 @@
   <component name="Git.Settings">
     <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
   </component>
+  <component name="GitHubPullRequestSearchHistory">{
+  &quot;lastFilter&quot;: {
+    &quot;state&quot;: &quot;OPEN&quot;,
+    &quot;assignee&quot;: &quot;Chris2319&quot;
+  }
+}</component>
+  <component name="GithubPullRequestsUISettings">{
+  &quot;selectedUrlAndAccountId&quot;: {
+    &quot;url&quot;: &quot;https://github.com/Chris2319/overtake-game.git&quot;,
+    &quot;accountId&quot;: &quot;186c90b9-9b80-4d9d-8e57-6ef06469ac08&quot;
+  }
+}</component>
   <component name="ProjectColorInfo">{
   &quot;associatedIndex&quot;: 6
 }</component>
@@ -46,7 +62,7 @@
     &quot;js.debugger.nextJs.config.created.client&quot;: &quot;true&quot;,
     &quot;js.debugger.nextJs.config.created.server&quot;: &quot;true&quot;,
     &quot;junie.onboarding.icon.badge.shown&quot;: &quot;true&quot;,
-    &quot;last_opened_file_path&quot;: &quot;/Users/chrisschutte/WebstormProjects/threejs/public&quot;,
+    &quot;last_opened_file_path&quot;: &quot;/Users/chrisschutte/WebstormProjects/threejs/public/gameplay&quot;,
     &quot;node.js.detected.package.eslint&quot;: &quot;true&quot;,
     &quot;node.js.detected.package.tslint&quot;: &quot;true&quot;,
     &quot;node.js.selected.package.eslint&quot;: &quot;(autodetect)&quot;,
@@ -60,6 +76,7 @@
 }</component>
   <component name="RecentsManager">
     <key name="CopyFile.RECENT_KEYS">
+      <recent name="$PROJECT_DIR$/public/gameplay" />
       <recent name="$PROJECT_DIR$/public" />
     </key>
   </component>
@@ -94,6 +111,8 @@
       <updated>1789708971206</updated>
       <workItem from="1789708972221" duration="380000" />
       <workItem from="1789709357100" duration="72761000" />
+      <workItem from="1790158280544" duration="45506000" />
+      <workItem from="1790591907632" duration="8041000" />
     </task>
     <task id="LOCAL-00001" summary="updates">
       <option name="closed" value="true" />
@@ -119,7 +138,23 @@
       <option name="project" value="LOCAL" />
       <updated>1790071535693</updated>
     </task>
-    <option name="localTasksCounter" value="4" />
+    <task id="LOCAL-00004" summary="updates">
+      <option name="closed" value="true" />
+      <created>1790315271787</created>
+      <option name="number" value="00004" />
+      <option name="presentableId" value="LOCAL-00004" />
+      <option name="project" value="LOCAL" />
+      <updated>1790315271787</updated>
+    </task>
+    <task id="LOCAL-00005" summary="updates">
+      <option name="closed" value="true" />
+      <created>1790315280755</created>
+      <option name="number" value="00005" />
+      <option name="presentableId" value="LOCAL-00005" />
+      <option name="project" value="LOCAL" />
+      <updated>1790315280755</updated>
+    </task>
+    <option name="localTasksCounter" value="6" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">

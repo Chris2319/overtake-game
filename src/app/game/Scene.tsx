@@ -16,6 +16,7 @@ import {
   CELL,
   TILE_HEIGHT,
 } from "@/lib/game/geometry";
+import { createDroid, DROID_RING_PULSE_SPEED } from "@/lib/game/droid";
 
 /** Lets the player free-orbit the camera (mouse drag/scroll) instead of the
  * scripted follow-camera, toggled from the HUD or by pressing "o". */
@@ -68,6 +69,15 @@ const TILE_BOUNCE_DEPTH = 0.05;
  * pulses with the bounce instead of just the geometry moving. */
 const TILE_EDGE_OPACITY_IDLE = 0.55;
 const TILE_EDGE_OPACITY_BOUNCE_PEAK = 1;
+/** Game-start intro: every tile starts stacked this far above its own resting
+ * spot (world units, scaled off CELL so it clears the visible row band
+ * regardless of which row a tile is on) and drops in once `playTileDropIn`
+ * fires — see `SceneHandle.playTileDropIn`. Each tile's own fall is staggered
+ * by a random delay up to `TILE_DROP_STAGGER_MAX_MS` so the whole board
+ * doesn't land in one flat, robotic beat. */
+const TILE_DROP_HEIGHT = CELL * 9;
+const TILE_DROP_DURATION_MS = 550;
+const TILE_DROP_STAGGER_MAX_MS = 900;
 /** A trapdoor tile's top face is split into two hinged panels (hinge at
  * each outer edge) that swing down and open past vertical, like a real
  * double trapdoor falling open, instead of just tinting a flat tile.
@@ -254,117 +264,11 @@ function spawnTrailParticle(trail: TrailSystem, pos: THREE.Vector3) {
   trail.nextIndex = (idx + 1) % TRAIL_MAX_PARTICLES;
 }
 
-/** How much brighter (and bigger) the hover ring under the current player's
- * token glows compared to its idle state, so it's obvious which token is
- * about to move without adding any new geometry to the scene. Pulses gently
- * rather than sitting at a flat boosted value, to draw the eye. */
-const RING_INTENSITY_IDLE = 1.0;
-const RING_INTENSITY_ACTIVE = 2.4;
-const RING_PULSE_AMPLITUDE = 0.8;
-const RING_PULSE_SPEED = 3.2;
-const RING_SCALE_ACTIVE = 1.35;
-
-/** Builds a small hovering drone-bot as a player token: a dark spherical
- * body with a glowing visor stripe, belly band, hover ring, and a pair of
- * fin-like stabilizers — a basic first pass at the "hover drone" character
- * concept, in the same neon-glass language as the board itself. The visor
- * and belly band share one emissive material so `setColor` recolors (and,
- * for other players, dims) them in one go; the hover ring gets its own
- * material clone so its glow can be boosted independently for whichever
- * token belongs to the current player (see `setActive`), without affecting
- * the rest of the bot. Sized/anchored so the body center sits at the
- * group's origin, matching the old sphere token's `TOKEN_RADIUS` placement. */
+/** Builds the player token droid at the board's token scale. Character
+ * geometry/materials live in `@/lib/game/droid` so the same droid can be
+ * reused outside the game scene (e.g. the start screen). */
 function createPlayerToken(initialColor: number): THREE.Group {
-  const r = TOKEN_RADIUS;
-  const group = new THREE.Group();
-
-  // A dark slate tint (rather than a near-black one) keeps the chassis
-  // readable as a metal shape even in this scene's deliberately dim
-  // ambient/directional light (see the comment above where those are
-  // added) — plain near-black was reading as a faded, bloomed-out void
-  // under the bloom pass, with only the glowing visor/band/ring visible.
-  const bodyMat = new THREE.MeshStandardMaterial({
-    color: 0x454b5c,
-    emissive: 0x1c2029,
-    emissiveIntensity: 0.4,
-    roughness: 0.4,
-    metalness: 0.6,
-  });
-  const body = new THREE.Mesh(new THREE.SphereGeometry(r, 32, 24), bodyMat);
-  group.add(body);
-
-  const glowMat = new THREE.MeshStandardMaterial({
-    color: initialColor,
-    emissive: initialColor,
-    emissiveIntensity: 1.0,
-    roughness: 0.3,
-    metalness: 0.1,
-  });
-
-  // Horizontal visor stripe, proud of the sphere on the "front" face.
-  const visor = new THREE.Mesh(new THREE.BoxGeometry(r * 1.05, r * 0.22, r * 0.14), glowMat);
-  visor.position.set(0, r * 0.18, r * 0.92);
-  group.add(visor);
-
-  // Belly band wrapping most of the way around the equator.
-  const band = new THREE.Mesh(
-    new THREE.TorusGeometry(r * 0.88, r * 0.1, 8, 28, Math.PI * 1.2),
-    glowMat,
-  );
-  band.rotation.x = Math.PI / 2;
-  band.rotation.z = Math.PI * 0.9;
-  band.position.y = -r * 0.02;
-  group.add(band);
-
-  // Hover ring, sitting below the body like a repulsor disc. Own material
-  // clone (rather than sharing glowMat) so its glow can be boosted for the
-  // current player independently of the visor/band.
-  const ringMat = glowMat.clone();
-  const ring = new THREE.Mesh(new THREE.TorusGeometry(r * 0.78, r * 0.07, 8, 28), ringMat);
-  ring.rotation.x = Math.PI / 2;
-  ring.position.y = -r * 1.05;
-  group.add(ring);
-
-  // A pair of small angled stabilizer fins. Given their own pale metallic
-  // material (rather than sharing the dark bodyMat) so they read as a
-  // distinct accent piece instead of blending into the chassis.
-  const finMat = new THREE.MeshStandardMaterial({
-    color: 0xc7ccd6,
-    emissive: 0x30333c,
-    emissiveIntensity: 0.3,
-    roughness: 0.3,
-    metalness: 0.8,
-  });
-  const finGeo = new THREE.BoxGeometry(r * 0.5, r * 0.1, r * 0.3);
-  const finLeft = new THREE.Mesh(finGeo, finMat);
-  finLeft.position.set(-r * 1.0, r * 0.05, 0);
-  finLeft.rotation.z = Math.PI * 0.12;
-  group.add(finLeft);
-  const finRight = new THREE.Mesh(finGeo, finMat);
-  finRight.position.set(r * 1.0, r * 0.05, 0);
-  finRight.rotation.z = -Math.PI * 0.12;
-  group.add(finRight);
-
-  group.userData.setColor = (color: number) => {
-    glowMat.color.set(color);
-    glowMat.emissive.set(color);
-    ringMat.color.set(color);
-    ringMat.emissive.set(color);
-  };
-
-  // Drives the hover ring's glow/size each frame: `pulseT` (0-1, typically a
-  // sine wave) only matters while `active`, letting the caller keep every
-  // token's ring in sync with one shared clock instead of each animating on
-  // its own.
-  group.userData.setRingActive = (active: boolean, pulseT: number) => {
-    ringMat.emissiveIntensity = active
-      ? RING_INTENSITY_ACTIVE + pulseT * RING_PULSE_AMPLITUDE
-      : RING_INTENSITY_IDLE;
-    const scale = active ? RING_SCALE_ACTIVE : 1;
-    ring.scale.set(scale, scale, scale);
-  };
-
-  return group;
+  return createDroid(initialColor, TOKEN_RADIUS);
 }
 
 /** Follow-camera framing: fixed field of view, sized so ROWS_VISIBLE rows
@@ -425,6 +329,15 @@ const FLOOR_TAG_HEIGHT = CELL * 0.42;
 /** How far to the side of the board (beyond its right edge) the tags float. */
 const FLOOR_HUD_X_MARGIN = CELL * 3;
 
+/** Resolves the `--font-retro` CSS variable (the 8-bit "Press Start 2P" font
+ * used across the HUD) to a plain font-family string a canvas 2D context can
+ * use directly — canvas `font` doesn't understand CSS custom properties. */
+function retroFontFamily(): string {
+  if (typeof document === "undefined") return "monospace";
+  const value = getComputedStyle(document.documentElement).getPropertyValue("--font-retro").trim();
+  return value || "monospace";
+}
+
 /** Draws one floor tag's face — a clipped-corner bracket with a "FLOOR NN"
  * label — to a canvas, used as the tag mesh's texture. The current floor
  * gets a bright glowing border and white text; the rest sit dim in the
@@ -457,7 +370,7 @@ function createFloorTagTexture(label: string, current: boolean): THREE.CanvasTex
   ctx.stroke();
   ctx.shadowBlur = 0;
   ctx.fillStyle = current ? "#dffbff" : "rgba(34, 227, 255, 0.75)";
-  ctx.font = "700 42px sans-serif";
+  ctx.font = `34px ${retroFontFamily()}`;
   ctx.textBaseline = "middle";
   ctx.fillText(label, 42, h / 2 + 2);
   const texture = new THREE.CanvasTexture(canvas);
@@ -497,6 +410,17 @@ interface AnimationJob {
 interface TileBounceJob {
   tileId: string;
   elapsed: number;
+}
+
+/** One tile's fall-into-place at game start — see `TILE_DROP_HEIGHT` and
+ * `SceneHandle.playTileDropIn`. `delay` counts down first (each tile's own
+ * random stagger) before `elapsed` starts advancing toward `duration`. */
+interface TileDropJob {
+  tileId: string;
+  delay: number;
+  elapsed: number;
+  duration: number;
+  restY: number;
 }
 
 interface TrapdoorPanels {
@@ -564,6 +488,11 @@ export interface SceneHandle {
    * rotates the viewing angle instead of the framing. Switches into orbit
    * mode first if it isn't already active. */
   panBy: (deltaY: number) => void;
+  /** Game-start intro: snaps every tile up to `TILE_DROP_HEIGHT` above its
+   * resting spot, then lets each one fall back into place on its own random
+   * delay/duration. Meant to fire right as the HUD powers on, once the scene
+   * layer is actually visible. */
+  playTileDropIn: () => void;
 }
 
 interface SceneProps {
@@ -657,6 +586,7 @@ export default function Scene({ state, handleRef, onOrbitModeChange }: SceneProp
   const trailSystemsRef = useRef(new Map<PlayerId, TrailSystem[]>());
   const activeJobsRef = useRef<AnimationJob[]>([]);
   const tileBounceJobsRef = useRef<TileBounceJob[]>([]);
+  const tileDropJobsRef = useRef<TileDropJob[]>([]);
   const trapdoorPanelsRef = useRef(new Map<string, TrapdoorPanels>());
   const trapdoorStateRef = useRef(new Map<string, TrapdoorState>());
   const temporaryTrapdoorsRef = useRef(new Map<string, TemporaryTrapdoor>());
@@ -1091,6 +1021,7 @@ export default function Scene({ state, handleRef, onOrbitModeChange }: SceneProp
 
     const activeJobs = activeJobsRef.current;
     const tileBounceJobs = tileBounceJobsRef.current;
+    const tileDropJobs = tileDropJobsRef.current;
     /** A step climbs a physical staircase only when its source tile has a
      * recorded flight of stairs (a ladder hop, or a plain step that happens
      * to cross a row boundary) leading to that exact destination (guards
@@ -1275,6 +1206,22 @@ export default function Scene({ state, handleRef, onOrbitModeChange }: SceneProp
       setOrbitMode,
       orbitBy,
       panBy,
+      playTileDropIn: () => {
+        tileDropJobs.length = 0;
+        for (const [tileId, restPos] of tileWorldPositions) {
+          const tileMesh = tileMeshes.get(tileId);
+          if (!tileMesh) continue;
+          const restY = restPos.y - TILE_HEIGHT / 2;
+          tileMesh.position.y = restY + TILE_DROP_HEIGHT;
+          tileDropJobs.push({
+            tileId,
+            delay: Math.random() * TILE_DROP_STAGGER_MAX_MS,
+            elapsed: 0,
+            duration: TILE_DROP_DURATION_MS,
+            restY,
+          });
+        }
+      },
     };
 
     let frameId: number;
@@ -1388,6 +1335,38 @@ export default function Scene({ state, handleRef, onOrbitModeChange }: SceneProp
           }
           trail.positionAttr.needsUpdate = true;
           trail.ageAttr.needsUpdate = true;
+        }
+      }
+
+      // Game-start intro: tiles still stacked above their resting spot
+      // (see `playTileDropIn`) count down their own random delay, then fall
+      // the rest of the way in, easing out so the landing reads as a soft
+      // touchdown rather than a linear slide. Feeds into the same
+      // press-and-glow `triggerTileBounce` plays for a player landing, so
+      // the touchdown gets that same squish/flash instead of a bare stop.
+      for (let i = tileDropJobs.length - 1; i >= 0; i--) {
+        const dropJob = tileDropJobs[i];
+        const tileMesh = tileMeshes.get(dropJob.tileId);
+        if (!tileMesh) {
+          tileDropJobs.splice(i, 1);
+          continue;
+        }
+        if (dropJob.delay > 0) {
+          dropJob.delay -= dt;
+          continue;
+        }
+        dropJob.elapsed += dt;
+        const dt2 = Math.min(dropJob.elapsed / dropJob.duration, 1);
+        const eased = 1 - Math.pow(1 - dt2, 3);
+        tileMesh.position.y = THREE.MathUtils.lerp(
+          dropJob.restY + TILE_DROP_HEIGHT,
+          dropJob.restY,
+          eased,
+        );
+        if (dt2 >= 1) {
+          tileMesh.position.y = dropJob.restY;
+          triggerTileBounce(dropJob.tileId);
+          tileDropJobs.splice(i, 1);
         }
       }
 
@@ -1539,7 +1518,7 @@ export default function Scene({ state, handleRef, onOrbitModeChange }: SceneProp
       // player, pulsing it so it's obvious which token is about to move;
       // every other token's ring stays at its idle glow.
       const activePlayerId = stateRef.current.players[stateRef.current.currentPlayerIndex]?.id;
-      const ringPulse = (Math.sin(now * 0.001 * RING_PULSE_SPEED) + 1) / 2;
+      const ringPulse = (Math.sin(now * 0.001 * DROID_RING_PULSE_SPEED) + 1) / 2;
       for (const [playerId, mesh] of playerMeshes) {
         const setRingActive = mesh.userData.setRingActive as
           | ((active: boolean, pulseT: number) => void)
