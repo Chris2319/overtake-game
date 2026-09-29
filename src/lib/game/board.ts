@@ -54,6 +54,10 @@ const ABILITY_TILES: [position: number, abilityId: string][] = [
  * listed here, one per entry. */
 const DAMAGE_TILES: number[] = [5, 23, 47, 71, 88,  89];
 
+/** Special tiles: currently just a stubbed-out visual marker (plain green,
+ * no gameplay effect yet). One sits in the middle of floor 6 (row index 5). */
+const SPECIAL_TILES: number[] = [rowColToPosition(5, 4)];
+
 function idForPosition(layerId: string, position: number) {
   return `${layerId}-tile-${position}`;
 }
@@ -106,6 +110,11 @@ export function generateLayer(
   for (const position of DAMAGE_TILES) {
     if (!effectByPosition.has(position)) {
       effectByPosition.set(position, { type: "damage" });
+    }
+  }
+  for (const position of SPECIAL_TILES) {
+    if (!effectByPosition.has(position)) {
+      effectByPosition.set(position, { type: "special" });
     }
   }
 

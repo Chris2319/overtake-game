@@ -5,6 +5,7 @@ import { WebSocketServer, WebSocket } from "ws";
 import {
   applyCardPlay,
   applyTeamAdvanceCardPlay,
+  applyWheelOutcome,
   chooseOfferCard,
   computeFreezeCardPlay,
   computeMove,
@@ -14,10 +15,13 @@ import {
   currentPlayer,
   OFFER_TIMEOUT_SECONDS,
   resolveOfferTimeout,
+  rollWheelSegment,
   setupColumnTrapDevTest,
   TEAM_COLORS,
+  WHEEL_SEGMENTS,
 } from "../../../lib/game/engine";
 import type { TeamConfig } from "../../../lib/game/engine";
+import { findTile } from "../../../lib/game/board";
 import type {
   Card,
   CardId,
@@ -209,11 +213,26 @@ function executeCardPlay(room: Room, player: Player, card: Card) {
     );
   } else if (card.type === "freeze") {
     const result = computeFreezeCardPlay(state, player.id);
-    finalizeCardPlay(room, card, [{ playerId: player.id, path: result.path }], applyCardPlay(state, player.id, card.id, result));
+    finalizeMoveCardPlay(room, card, player.id, result);
   } else {
     const result = computeMove(state, player.id, card.value);
-    finalizeCardPlay(room, card, [{ playerId: player.id, path: result.path }], applyCardPlay(state, player.id, card.id, result));
+    finalizeMoveCardPlay(room, card, player.id, result);
   }
+}
+
+/** Shared tail for a plain single-mover move ("move"/"freeze" cards): commits
+ * the move, and — if it lands on a "special" tile — holds the turn on the
+ * mover and arms `pendingWheelSpin` instead of letting the usual turn
+ * advance happen, so the Fortune Wheel gets a chance to resolve first (see
+ * `spin_wheel`/`finalizeWheelSpin`). */
+function finalizeMoveCardPlay(room: Room, card: Card, playerId: PlayerId, result: ReturnType<typeof computeMove>) {
+  const state = room.gameState!;
+  const landsOnSpecial = findTile(state.tiles, result.finalTileId).effect.type === "special";
+  let newState = applyCardPlay(state, playerId, card.id, result, { holdTurn: landsOnSpecial });
+  if (landsOnSpecial) {
+    newState = { ...newState, pendingWheelSpin: { playerId, tileId: result.finalTileId } };
+  }
+  finalizeCardPlay(room, card, [{ playerId, path: result.path }], newState);
 }
 
 function finalizeRetreat(room: Room, pending: PendingRetreat, teamId: TeamId) {
@@ -299,7 +318,10 @@ app.prepare().then(() => {
         ws.playerId = hostPlayerId;
         ws.controlledPlayerIds = new Set(controlledIds);
 
-        room.gameState = createInitialState(TEAM_COLORS.filter((t) => teamConfigs.has(t.id)).map((t) => teamConfigs.get(t.id)!));
+        room.gameState = createInitialState(
+          TEAM_COLORS.filter((t) => teamConfigs.has(t.id)).map((t) => teamConfigs.get(t.id)!),
+          { fixedHand: true },
+        );
         room.phase = "playing";
         send(ws, {
           event: "game_created",
@@ -371,7 +393,7 @@ app.prepare().then(() => {
       } else if (msg.action === "play_card") {
         const room = rooms.get(normalizeGameId(ws.gameId));
         if (!room || room.phase !== "playing" || !room.gameState || !ws.playerId) return;
-        if (room.pendingRetreat) return;
+        if (room.pendingRetreat || room.gameState.pendingWheelSpin) return;
         const player = currentPlayer(room.gameState);
         if (!controlsPlayer(ws, player.id)) return;
         const card = player.hand.find((c) => c.id === msg.cardId);
@@ -408,6 +430,16 @@ app.prepare().then(() => {
         scheduleOfferTimeout(room);
         room.gameState = { ...room.gameState, cardOffer: { ...offer, deadline: Date.now() + OFFER_TIMEOUT_SECONDS * 1000 } };
         broadcast(room, { event: "offer_updated", state: room.gameState });
+      } else if (msg.action === "spin_wheel") {
+        const room = rooms.get(normalizeGameId(ws.gameId));
+        if (!room || room.phase !== "playing" || !room.gameState || !ws.playerId) return;
+        const pending = room.gameState.pendingWheelSpin;
+        if (!pending || !controlsPlayer(ws, pending.playerId)) return;
+        const segmentIndex = rollWheelSegment();
+        const outcome = WHEEL_SEGMENTS[segmentIndex].type;
+        const { state: newState, moves } = applyWheelOutcome(room.gameState, pending.playerId, outcome);
+        room.gameState = newState;
+        broadcast(room, { event: "wheel_spun", playerId: pending.playerId, segmentIndex, outcome, moves, state: newState });
       } else if (msg.action === "dev_setup_column_trap_test") {
         // Dev-only test harness — never wired into a production build (see
         // the dev-mode check around the button that sends this in GameUI).

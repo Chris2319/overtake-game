@@ -20,7 +20,7 @@ export interface BoardLayer {
   yOffset: number;
 }
 
-export type TileEffectType = "none" | "ladder" | "trapdoor" | "ability" | "damage";
+export type TileEffectType = "none" | "ladder" | "trapdoor" | "ability" | "damage" | "special";
 
 export interface TileEffect {
   type: TileEffectType;
@@ -65,6 +65,11 @@ export type CardId = string;
  * their next turn (see `GameState.frozenTiles`). The type tag lets further
  * special cards slot in later without changing the hand/deck plumbing. */
 export type CardType = "move" | "team-advance" | "team-retreat" | "row-trap" | "column-trap" | "freeze";
+
+/** The outcomes a "special" tile's Fortune Wheel can land on (see
+ * `GameState.pendingWheelSpin`). Each is a fixed, non-random magnitude —
+ * only which segment the spin lands on is random. */
+export type WheelOutcomeType = "advance" | "retreat" | "swap" | "wildcard" | "freeze" | "drop";
 
 export interface Card {
   id: CardId;
@@ -144,6 +149,10 @@ export interface GameState {
    * extra tile); it leaves the list once the stuck player finally moves off
    * it again, or if a row/column-trap card destroys it first. */
   frozenTiles: TileId[];
+  /** Non-null while a player who just landed on a "special" (green) tile is
+   * choosing (or about to auto-spin) the Fortune Wheel — the turn is held on
+   * `playerId` until it resolves (see `spin_wheel`/`wheel_spun`). */
+  pendingWheelSpin: { playerId: PlayerId; tileId: TileId } | null;
 }
 
 /** A single hop in an animated move: land on `tileId`, optionally via a
@@ -219,6 +228,9 @@ export type WsClientAction =
   | { action: "select_retreat_target"; teamId: TeamId }
   | { action: "choose_offer_card"; cardId: CardId }
   | { action: "offer_activity" }
+  /** Spins the Fortune Wheel for the pending player once `GameState.pendingWheelSpin`
+   * is set — the server picks the outcome. */
+  | { action: "spin_wheel" }
   /** Dev-only: sets up the column-trap fall animation test scenario (see
    * `setupColumnTrapDevTest`). Ignored by the server outside of `next dev`. */
   | { action: "dev_setup_column_trap_test" };
@@ -241,6 +253,18 @@ export type WsServerEvent =
   | { event: "await_target"; playerId: PlayerId; card: Card }
   | { event: "card_played"; card: Card; moves: PendingMove[]; state: GameState }
   | { event: "offer_updated"; state: GameState }
+  /** The Fortune Wheel's result: `segmentIndex` (into the fixed
+   * `WHEEL_SEGMENTS` order every client renders the wheel in) and `outcome`
+   * tell clients which wedge to spin the wheel onto before animating
+   * `moves` and adopting `state`, mirroring `card_played`. */
+  | {
+      event: "wheel_spun";
+      playerId: PlayerId;
+      segmentIndex: number;
+      outcome: WheelOutcomeType;
+      moves: PendingMove[];
+      state: GameState;
+    }
   | { event: "error"; message: string }
   /** Response to `dev_setup_column_trap_test` — clients just replace their
    * local state with this, no move animation involved. */

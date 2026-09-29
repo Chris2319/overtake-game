@@ -16,14 +16,27 @@ export function NeonButton({
   disabled,
   onClick,
   children,
+  scale = 1,
+  extraPaddingX = 0,
 }: {
   variant: "primary" | "secondary";
   disabled?: boolean;
   onClick: () => void;
   children: React.ReactNode;
+  /** Uniformly scales the button up/down from its default size (padding,
+   * font, corner cut, border) — the start page's buttons all rely on the
+   * default of 1; a caller that wants a bigger single CTA (e.g. the Fortune
+   * Wheel's Spin button) passes a larger value instead of the whole
+   * component growing everywhere it's used. */
+  scale?: number;
+  /** Extra horizontal padding added on top of `scale`'s, for a single call
+   * site that wants a wider button without changing every other button's
+   * default proportions (e.g. the Fortune Wheel's Spin button, which sits
+   * alone rather than paired with another button it needs to match). */
+  extraPaddingX?: number;
 }) {
-  const cut = 10;
-  const borderWidth = 1.5;
+  const cut = 10 * scale;
+  const borderWidth = 1.5 * scale;
   const glow = variant === "primary" ? "0 0 26px rgba(34, 227, 255, 0.6)" : "0 0 14px rgba(34, 227, 255, 0.35)";
 
   return (
@@ -32,12 +45,12 @@ export function NeonButton({
       onClick={onClick}
       style={{
         position: "relative",
-        padding: "16px 14px",
+        padding: `${16 * scale}px ${14 * scale + extraPaddingX}px`,
         border: "none",
         background: "none",
         color: variant === "primary" ? "#22e3ff" : "#bdf6ff",
         fontFamily: "var(--font-retro)",
-        fontSize: 13,
+        fontSize: 13 * scale,
         letterSpacing: "0.08em",
         textTransform: "uppercase",
         cursor: "pointer",

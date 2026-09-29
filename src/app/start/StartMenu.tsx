@@ -77,8 +77,8 @@ export function StartMenu(props: {
 }
 
 /** The dev/test-only QA panel: choose player count and each seat's name/team,
- * then start a local no-bots game. Kept out of the start page unless opened
- * with `?qa=1` (see `page.tsx`). */
+ * then start a local no-bots game where every seat is dealt the same fixed
+ * test hand (see `createInitialState`'s `fixedHand` option). */
 export function StartQaPanel(props: {
   connected: boolean;
   qaCount: number;

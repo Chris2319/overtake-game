@@ -2,11 +2,23 @@
 
 import { useEffect, useRef, useState, type ReactNode, type Ref } from "react";
 import Scene, { type SceneHandle } from "./Scene";
+import { NeonButton } from "@/app/ui/NeonButton";
 import { findTile } from "@/lib/game/board";
 import { CELL } from "@/lib/game/geometry";
-import { currentPlayer, OFFER_TIMEOUT_SECONDS, trapCardTileIds } from "@/lib/game/engine";
+import { currentPlayer, OFFER_TIMEOUT_SECONDS, trapCardTileIds, WHEEL_SEGMENTS } from "@/lib/game/engine";
 import { useWs } from "@/lib/ws";
-import type { Card, CardId, CardOffer, GameState, MoveStep, PlayerId, TeamId, Tile, TileId } from "@/lib/game/types";
+import type {
+  Card,
+  CardId,
+  CardOffer,
+  GameState,
+  MoveStep,
+  PlayerId,
+  TeamId,
+  Tile,
+  TileId,
+  WheelOutcomeType,
+} from "@/lib/game/types";
 
 const CARD_WIDTH = 160;
 const CARD_HEIGHT = 250;
@@ -318,6 +330,73 @@ function SnowflakeIcon({ color }: { color: string }) {
   );
 }
 
+/** The stacked double-chevron "direction of travel" glyph every move-shaped
+ * card face draws (see `CardFace`) — pointing up for a forward move, down
+ * for a backward one — pulled out on its own so the Fortune Wheel's wedges
+ * (see `SpinWheelOverlay`) can reuse exactly the same icon language. */
+function ChevronIcon({
+  direction,
+  color,
+  scale = 1,
+}: {
+  direction: "forward" | "backward";
+  color: string;
+  /** Card faces want this at its native size (the default); the Fortune
+   * Wheel's "advance"/"retreat" wedges (see `wheelSegmentIcon`) scale it up,
+   * since the chevron glyph is naturally much smaller than the wheel's other
+   * icons (`SnowflakeIcon`, `TrapGridIcon`, ...) and would otherwise look
+   * tiny sitting next to them. */
+  scale?: number;
+}) {
+  const points = direction === "backward" ? "-18,-8 0,8 18,-8" : "-18,8 0,-8 18,8";
+  const dy = direction === "backward" ? -14 : 14;
+  return (
+    <g transform={scale !== 1 ? `scale(${scale})` : undefined}>
+      <polyline points={points} fill="none" stroke={color} strokeWidth={5} strokeLinecap="round" strokeLinejoin="round" />
+      <polyline
+        points={points}
+        fill="none"
+        stroke={color}
+        strokeWidth={5}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        transform={`translate(0, ${dy})`}
+      />
+    </g>
+  );
+}
+
+/** `CardBack`'s "no info yet" center glyph — up-chevrons over a down-pointing
+ * triangle — pulled out on its own so the Fortune Wheel's "wildcard" wedge
+ * (see `SpinWheelOverlay`) can reuse it: a wildcard's magnitude is exactly
+ * the same kind of "unknown until it resolves" thing the card back already
+ * represents. */
+function MysteryIcon({ cyan, pink }: { cyan: string; pink: string }) {
+  return (
+    <g>
+      <polyline points="-26,4 0,-22 26,4" fill="none" stroke={cyan} strokeWidth={9} strokeLinecap="round" strokeLinejoin="round" />
+      <polyline points="-26,22 0,-4 26,22" fill="none" stroke={cyan} strokeWidth={9} strokeLinecap="round" strokeLinejoin="round" />
+      <polygon points="-14,32 14,32 0,52" fill={pink} />
+    </g>
+  );
+}
+
+/** Two opposing curved arrows chasing each other — no card plays a "swap
+ * positions" effect, so this has no existing card face to match; drawn in
+ * the same plain-stroke, rounded-cap language as `ChevronIcon`/`SnowflakeIcon`
+ * so it still reads as part of the same icon set. Used only by the Fortune
+ * Wheel's "swap" wedge (see `SpinWheelOverlay`). */
+function SwapArrowsIcon({ color }: { color: string }) {
+  return (
+    <g fill="none" stroke={color} strokeWidth={4} strokeLinecap="round">
+      <path d="M -26 -8 A 27 27 0 0 1 18 -26" />
+      <polygon points="18,-26 4,-24 12,-12" fill={color} stroke="none" />
+      <path d="M 26 8 A 27 27 0 0 1 -18 26" />
+      <polygon points="-18,26 -4,24 -12,12" fill={color} stroke="none" />
+    </g>
+  );
+}
+
 /** Unique face for a "freeze" card: the clipped-corner HUD frame shared by
  * every card, but with a snowflake icon in place of the plain numeric
  * readout (see `TrapCardFace`, which this mirrors) — a "+1" alone wouldn't
@@ -408,8 +487,6 @@ function CardFace({
   const segStartX = 24;
   const segY = h - 40;
   const chevronY = backward ? h * 0.62 : h * 0.58;
-  const chevronDy = backward ? -14 : 14;
-  const chevronPoints = backward ? "-18,-8 0,8 18,-8" : "-18,8 0,-8 18,8";
 
   return (
     <svg viewBox={`0 0 ${w} ${h}`} width="100%" height="100%" style={{ display: "block" }}>
@@ -502,16 +579,7 @@ function CardFace({
       )}
       {/* chevrons */}
       <g transform={`translate(${w / 2}, ${chevronY})`}>
-        <polyline points={chevronPoints} fill="none" stroke={color} strokeWidth={5} strokeLinecap="round" strokeLinejoin="round" />
-        <polyline
-          points={chevronPoints}
-          fill="none"
-          stroke={color}
-          strokeWidth={5}
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          transform={`translate(0, ${chevronDy})`}
-        />
+        <ChevronIcon direction={backward ? "backward" : "forward"} color={color} />
       </g>
       {/* segmented magnitude bar */}
       {Array.from({ length: segments }, (_, i) => (
@@ -551,6 +619,29 @@ function ringArc(cx: number, cy: number, r: number, deg: number, spanDeg: number
   const p1 = ringPoint(cx, cy, r, deg - spanDeg / 2);
   const p2 = ringPoint(cx, cy, r, deg + spanDeg / 2);
   return `M ${p1.x} ${p1.y} A ${r} ${r} 0 0 1 ${p2.x} ${p2.y}`;
+}
+
+/** An annular wedge of a ring, from `startDeg` to `endDeg` (same
+ * clockwise-from-top convention as `ringPoint`) running from `innerR` out to
+ * `outerR` — the Fortune Wheel's segment shape. `innerR` is the hub circle's
+ * own radius, not 0: every wedge's radial edges (and the gap between
+ * neighboring wedges — see `WHEEL_GAP_DEG`) should start right at the hub's
+ * rim, not converge to the wheel's true center point, which the hub
+ * (drawn on top) covers anyway. */
+function wheelWedgePath(cx: number, cy: number, outerR: number, innerR: number, startDeg: number, endDeg: number): string {
+  const outerStart = ringPoint(cx, cy, outerR, startDeg);
+  const outerEnd = ringPoint(cx, cy, outerR, endDeg);
+  const innerStart = ringPoint(cx, cy, innerR, startDeg);
+  const innerEnd = ringPoint(cx, cy, innerR, endDeg);
+  const largeArc = endDeg - startDeg > 180 ? 1 : 0;
+  return [
+    `M ${innerStart.x} ${innerStart.y}`,
+    `L ${outerStart.x} ${outerStart.y}`,
+    `A ${outerR} ${outerR} 0 ${largeArc} 1 ${outerEnd.x} ${outerEnd.y}`,
+    `L ${innerEnd.x} ${innerEnd.y}`,
+    `A ${innerR} ${innerR} 0 ${largeArc} 0 ${innerStart.x} ${innerStart.y}`,
+    "Z",
+  ].join(" ");
 }
 
 /** Face-down card back: the same clipped-corner HUD frame as `CardFace`,
@@ -607,9 +698,7 @@ function CardBack({ cyan = "#22e3ff", pink = "#ff2d95" }: { cyan?: string; pink?
 
       {/* center glyph: up-chevrons over a down-triangle */}
       <g transform={`translate(${cx}, ${cy})`}>
-        <polyline points="-26,4 0,-22 26,4" fill="none" stroke={cyan} strokeWidth={9} strokeLinecap="round" strokeLinejoin="round" />
-        <polyline points="-26,22 0,-4 26,22" fill="none" stroke={cyan} strokeWidth={9} strokeLinecap="round" strokeLinejoin="round" />
-        <polygon points="-14,32 14,32 0,52" fill={pink} />
+        <MysteryIcon cyan={cyan} pink={pink} />
       </g>
 
       {/* bottom-left hazard stripes */}
@@ -740,6 +829,293 @@ function TeamTargetOverlay({
           title={team.name}
         />
       ))}
+    </div>
+  );
+}
+
+/** Start/end angle (clockwise-from-top, same convention as `ringPoint`) of
+ * each `WHEEL_SEGMENTS` wedge, laid out back-to-back in order and sized by
+ * each segment's `weight` (default 1) — the same weight `rollWheelSegment`
+ * uses server-side, so a wedge's on-screen slice always matches its actual
+ * odds. */
+const WHEEL_BOUNDS: { start: number; end: number }[] = (() => {
+  const totalWeight = WHEEL_SEGMENTS.reduce((sum, s) => sum + (s.weight ?? 1), 0);
+  let angle = 0;
+  return WHEEL_SEGMENTS.map((s) => {
+    const start = angle;
+    angle += ((s.weight ?? 1) / totalWeight) * 360;
+    return { start, end: angle };
+  });
+})();
+/** Small angular margin trimmed off both edges of every wedge's *drawn*
+ * shape (not its logical `WHEEL_BOUNDS`, which stays edge-to-edge for the
+ * rotation/probability math) — without it, two neighboring wedges' strokes
+ * sit exactly on top of each other and whichever one paints last wins that
+ * shared border, making it flicker between the two colors depending on
+ * array order rather than showing each wedge's own color on both its
+ * edges. */
+const WHEEL_GAP_DEG = 0.5;
+/** The hub circle's radius — also `wheelWedgePath`'s `innerR`, so every
+ * wedge's radial edges start at the hub's own rim instead of the wheel's
+ * true center point. */
+const WHEEL_HUB_RADIUS = 44;
+/** How long the wheel spins before settling on its landed segment. Exported
+ * so the standalone board prototype (which drives its own local spin instead
+ * of a server round trip) can time its own animation the same way. */
+export const WHEEL_SPIN_MS = 3200;
+/** How long the wheel takes to fade/scale in when it first appears, and
+ * (reversed) to fade/scale out once the celebration pause ends. Exported for
+ * the same reason as `WHEEL_SPIN_MS`. */
+export const WHEEL_ENTER_MS = 380;
+export const WHEEL_EXIT_MS = 320;
+/** How long the wheel lingers, glowing, on its landed segment before it
+ * hides and the outcome is actually applied — just enough of a beat to read
+ * as "you got this" rather than snapping straight to the next state. */
+export const WHEEL_CELEBRATE_MS = 900;
+/** Extra full rotations the spin makes before settling, purely for effect. */
+const WHEEL_SPIN_TURNS = 6;
+/** Shared gold accent for the wheel's "wildcard" wedge and its hub ring —
+ * matches the offer fan's "selected card" glow (`#fff29e`), both reading as
+ * "the good one" in this game's color language. */
+const WHEEL_GOLD = "#fff29e";
+/** Outcomes that set the mover (or their team) back — colored magenta,
+ * matching every other "hazard"/backward-move language in this file (see
+ * `cardColor`'s `card.value < 0` case). Every other non-wildcard outcome
+ * reads as a plain forward/neutral move and stays blue. */
+const WHEEL_NEGATIVE_TYPES = new Set<WheelOutcomeType>(["retreat", "drop"]);
+
+/** A wedge's fill/stroke color: gold for "wildcard", magenta for a
+ * setback (see `WHEEL_NEGATIVE_TYPES`), blue for everything else. */
+function wheelSegmentColor(type: WheelOutcomeType): string {
+  if (type === "wildcard") return WHEEL_GOLD;
+  return WHEEL_NEGATIVE_TYPES.has(type) ? "#ff2d95" : "#22e3ff";
+}
+
+/** The wedge icon for each Fortune Wheel outcome, reusing exactly the same
+ * icon components a card face of the matching mechanic already draws:
+ * "advance"/"retreat" get the same forward/backward `ChevronIcon` a move
+ * card's value chevrons use, "freeze" gets the freeze card's `SnowflakeIcon`,
+ * "drop" gets the row-trap card's `TrapGridIcon` (a "drop" outcome falls one
+ * row, same as a row-trap), and "wildcard" gets the card back's
+ * `MysteryIcon` (its magnitude is just as unknown-until-resolved). Only
+ * "swap" has no card equivalent to match — see `SwapArrowsIcon`. */
+/** Chevrons are drawn much smaller than the wheel's other icons at their
+ * native (card-face) size — see `ChevronIcon`'s `scale` prop. */
+const WHEEL_CHEVRON_SCALE = 1.9;
+
+function wheelSegmentIcon(type: WheelOutcomeType, color: string) {
+  switch (type) {
+    case "advance":
+      return <ChevronIcon direction="forward" color={color} scale={WHEEL_CHEVRON_SCALE} />;
+    case "retreat":
+      return <ChevronIcon direction="backward" color={color} scale={WHEEL_CHEVRON_SCALE} />;
+    case "freeze":
+      return <SnowflakeIcon color={color} />;
+    case "drop":
+      return <TrapGridIcon mode="row" color={color} />;
+    case "wildcard":
+      return <MysteryIcon cyan={color} pink="#ff2d95" />;
+    case "swap":
+      return <SwapArrowsIcon color={color} />;
+  }
+}
+
+/** The wheel's own lifecycle, driven by the caller: `enter` and `exit` are the
+ * fade/scale-in and fade/scale-out beats (see `WHEEL_ENTER_MS`/`WHEEL_EXIT_MS`),
+ * `idle` covers everything from "fully shown" through the spin itself (which
+ * `spinning` drives independently), and `celebrate` is the post-landing pause
+ * (`WHEEL_CELEBRATE_MS`) where the landed wedge glows before the wheel exits. */
+export type WheelOverlayPhase = "enter" | "idle" | "celebrate" | "exit";
+
+/** Full-screen "Fortune Protocol" wheel shown while `GameState.pendingWheelSpin`
+ * is set (a controlled player landed on a "special"/green tile). Every client
+ * sees the same wheel and outcome labels; only the player being held for
+ * (`isController`) gets a working Spin button — everyone else just watches it
+ * resolve. `spinning` is non-null once the server's `wheel_spun` result has
+ * arrived, driving the wheel's CSS-transition spin onto `segmentIndex`
+ * (see `WHEEL_BOUNDS`'s rotation math below); `phase` (see `WheelOverlayPhase`)
+ * drives the surrounding fade/scale/celebrate beats. The caller applies the
+ * outcome's board moves and adopts the new state only once `phase` reaches
+ * `exit` and finishes. Exported so the standalone board prototype can reuse
+ * the exact same wheel UI locally. */
+export function SpinWheelOverlay({
+  moverName,
+  isController,
+  spinning,
+  phase,
+  onSpin,
+}: {
+  moverName: string;
+  isController: boolean;
+  spinning: { segmentIndex: number } | null;
+  phase: WheelOverlayPhase;
+  onSpin: () => void;
+}) {
+  const size = 620;
+  const r = 270;
+  const cx = size / 2;
+  const cy = size / 2;
+  // Rotating the wheel group by R shifts every wedge's on-screen angle by
+  // +R (clockwise, same sense `ringPoint` measures in) — so landing wedge
+  // i's center exactly under the fixed top pointer means solving
+  // wedgeMid + R ≡ 0 (mod 360). `WHEEL_SPIN_TURNS` extra full rotations are
+  // added purely so the spin has somewhere to travel from before settling.
+  const landedBounds = spinning ? WHEEL_BOUNDS[spinning.segmentIndex] : null;
+  const rotation = landedBounds ? WHEEL_SPIN_TURNS * 360 - (landedBounds.start + landedBounds.end) / 2 : 0;
+  // `enter`/`exit` are the two "hidden" endpoints of the fade/scale beat;
+  // every other phase reads as fully shown. Reusing the same shrunken/faded
+  // pose for both means the exit animation is just the enter one in reverse.
+  const shown = phase !== "enter" && phase !== "exit";
+  const showTransitionMs = phase === "enter" ? WHEEL_ENTER_MS : WHEEL_EXIT_MS;
+
+  return (
+    <div style={{ position: "fixed", inset: 0, zIndex: 65, pointerEvents: "none" }}>
+      <div
+        style={{
+          position: "absolute",
+          inset: 0,
+          background: "radial-gradient(ellipse at center, rgba(2,4,10,0.4) 0%, rgba(2,4,10,0.85) 100%)",
+          opacity: shown ? 1 : 0,
+          transition: `opacity ${showTransitionMs}ms ease`,
+        }}
+      />
+      <div
+        style={{
+          position: "fixed",
+          left: "50%",
+          top: "50%",
+          transform: `translate(-50%, -50%) scale(${shown ? 1 : 0.6})`,
+          opacity: shown ? 1 : 0,
+          transition: `transform ${showTransitionMs}ms cubic-bezier(0.34, 1.56, 0.64, 1), opacity ${showTransitionMs}ms ease`,
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          gap: 20,
+        }}
+      >
+        <div
+          style={{
+            fontFamily: "var(--font-retro)",
+            fontSize: 24,
+            color: "#22e3ff",
+            letterSpacing: "0.12em",
+            textTransform: "uppercase",
+            textShadow: "0 0 8px #22e3ff, 0 0 20px rgba(34,227,255,0.6)",
+          }}
+        >
+          Fortune Protocol
+        </div>
+        <div style={{ position: "relative", width: size, height: size }}>
+          <svg
+            width={size}
+            height={size}
+            style={{
+              position: "absolute",
+              inset: 0,
+              transform: `rotate(${rotation}deg)`,
+              // Slow start, fast middle, slow finish — a standard
+              // ease-in-out curve, rather than the sharp-out-of-the-gate
+              // "ease-out" a real spin doesn't actually do.
+              transition: spinning ? `transform ${WHEEL_SPIN_MS}ms cubic-bezier(0.65, 0, 0.35, 1)` : "none",
+              filter: "drop-shadow(0 0 26px rgba(34,227,255,0.35))",
+              // A pulsing glow while the wheel lingers on its landed segment
+              // (see `WheelOverlayPhase`'s `celebrate`) — the `animation`
+              // shorthand's `filter` keyframes take over from the static one
+              // above for as long as this phase lasts.
+              animation: phase === "celebrate" ? "wheel-celebrate-glow 480ms ease-in-out infinite" : undefined,
+            }}
+          >
+            <circle cx={cx} cy={cy} r={r + 10} fill="#05070f" fillOpacity={0.8} stroke="#22e3ff" strokeWidth={7} />
+            {WHEEL_SEGMENTS.map((seg, i) => {
+              const { start, end } = WHEEL_BOUNDS[i];
+              const color = wheelSegmentColor(seg.type);
+              const mid = (start + end) / 2;
+              // Icon/label sit on the wedge's own centerline, rotated by
+              // `mid` (same clockwise-from-top convention as `ringPoint`) so
+              // their "up" direction always points straight out along the
+              // radius, away from the hub — like the spokes of the wheel
+              // itself, matching every reference wheel-of-fortune design.
+              const iconPos = ringPoint(cx, cy, r * 0.8, mid);
+              const labelPos = ringPoint(cx, cy, r * 0.6, mid);
+              // The landed wedge, once the spin's settled and celebration
+              // starts — filled in solid (rather than the other wedges'
+              // faint tint) and lit up, so the win reads unmistakably.
+              const isWinner = phase === "celebrate" && spinning?.segmentIndex === i;
+              return (
+                <g key={i}>
+                  <path
+                    d={wheelWedgePath(cx, cy, r, WHEEL_HUB_RADIUS, start + WHEEL_GAP_DEG, end - WHEEL_GAP_DEG)}
+                    fill={color}
+                    fillOpacity={isWinner ? 0.55 : 0.06}
+                    stroke={color}
+                    strokeWidth={isWinner ? 6 : 4}
+                    style={{
+                      transition: "fill-opacity 200ms ease, stroke-width 200ms ease",
+                      filter: isWinner ? `drop-shadow(0 0 20px ${color})` : undefined,
+                    }}
+                  />
+                  <g transform={`translate(${iconPos.x}, ${iconPos.y}) rotate(${mid}) scale(0.85)`}>
+                    {wheelSegmentIcon(seg.type, color)}
+                  </g>
+                  {seg.type !== "wildcard" && (
+                    <text
+                      x={labelPos.x}
+                      y={labelPos.y}
+                      fontSize={seg.type === "advance" || seg.type === "retreat" ? 22 : 15}
+                      fontWeight={800}
+                      fontFamily="var(--font-retro)"
+                      fill={color}
+                      textAnchor="middle"
+                      dominantBaseline="middle"
+                      transform={`rotate(${mid}, ${labelPos.x}, ${labelPos.y})`}
+                    >
+                      {seg.label}
+                    </text>
+                  )}
+                </g>
+              );
+            })}
+            <circle cx={cx} cy={cy} r={WHEEL_HUB_RADIUS} fill="#0a0c14" stroke={WHEEL_GOLD} strokeWidth={2} />
+            {/* The deck's own logo (`CardBack`'s center glyph) in the hub —
+                the same "no info yet" mark every face-down card and the
+                deck pile carry, since the wheel's spin is exactly that kind
+                of not-yet-known draw. */}
+            <g transform={`translate(${cx}, ${cy - 8}) scale(0.42)`}>
+              <MysteryIcon cyan="#22e3ff" pink="#ff2d95" />
+            </g>
+          </svg>
+          {/* Fixed pointer marking exactly where the spin stops — a separate
+              (later, so it always paints on top of the wheel) svg that never
+              rotates; `rotation`'s math instead always brings the landed
+              wedge around to sit under this fixed point. */}
+          <svg width={size} height={size} style={{ position: "absolute", inset: 0, overflow: "visible", pointerEvents: "none" }}>
+            <polygon
+              points={`${cx - 16},${cy - r - 10} ${cx + 16},${cy - r - 10} ${cx},${cy - r + 20}`}
+              fill="#22e3ff"
+              style={{ filter: "drop-shadow(0 0 10px #22e3ff)" }}
+            />
+          </svg>
+        </div>
+        {isController ? (
+          <div style={{ pointerEvents: "auto" }}>
+            <NeonButton variant="primary" scale={2} extraPaddingX={80} disabled={!!spinning} onClick={onSpin}>
+              {spinning ? "Spinning..." : "Spin"}
+            </NeonButton>
+          </div>
+        ) : (
+          <div
+            style={{
+              color: "#8fe8ff",
+              fontFamily: "sans-serif",
+              fontWeight: 600,
+              fontSize: 14,
+              textShadow: "0 0 8px rgba(0,0,0,0.8)",
+            }}
+          >
+            Waiting for {moverName} to spin...
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -2000,6 +2376,15 @@ export default function GameUI({
   useEffect(() => {
     frozenTilesRef.current = state.frozenTiles;
   }, [state.frozenTiles]);
+  // Latest committed state, read (not written) inside the `wheel_spun`
+  // handler below — a Fortune Wheel "drop" outcome needs to know which row
+  // the mover was standing in *before* the drop lands (`msg.state` is
+  // already post-drop) so it can build/open trapdoors for the whole row,
+  // exactly like playing a row-trap card does.
+  const stateRef = useRef<GameState>(initialState);
+  useEffect(() => {
+    stateRef.current = state;
+  }, [state]);
   // Every player's hand as of the last committed state, read (not written)
   // inside the `card_played` handler below, before `state` itself updates —
   // gives the pre-damage card values to animate the hand's "-1" pop from
@@ -2024,7 +2409,45 @@ export default function GameUI({
   const [offerResolving, setOfferResolving] = useState(false);
   const offerResolvingRef = useRef(false);
   const [deckAnchor, setDeckAnchor] = useState<{ x: number; y: number } | null>(null);
+  // Identifies one offer "session" (from first appearing to fully resolving)
+  // independent of `cardOffer.offered`/`deadline`, both of which mutate on
+  // every intermediate pick and `offer_activity` renewal (see `chooseOfferCard`/
+  // `offer_activity` in server.ts) — captured once when the offer first shows
+  // up and held until it clears, so `CardOfferFan` below can key off it
+  // instead of the shrinking `offered` list. Keying off `offered` caused a
+  // full remount (replaying the deal-in animation) after every partial pick
+  // in a multi-pick offer, since each pick's server round trip removes that
+  // card from `offered` before the next one is sent.
+  const offerSessionKeyRef = useRef<string | null>(null);
+  if (state?.cardOffer) {
+    if (offerSessionKeyRef.current === null) {
+      offerSessionKeyRef.current = `${state.cardOffer.playerId}:${state.cardOffer.deadline}`;
+    }
+  } else {
+    offerSessionKeyRef.current = null;
+  }
   const [orbitMode, setOrbitMode] = useState(false);
+  // Local Fortune Wheel session: appears the instant `state.pendingWheelSpin`
+  // shows up (see the effect below), stays mounted through the spin/move
+  // animation even after the server has already cleared `pendingWheelSpin`
+  // from state (so the wheel doesn't vanish mid-spin), and is cleared once
+  // that whole sequence finishes and the outcome's state is adopted.
+  const [wheelOverlay, setWheelOverlay] = useState<{
+    playerId: PlayerId;
+    segmentIndex: number | null;
+    phase: WheelOverlayPhase;
+  } | null>(null);
+  useEffect(() => {
+    if (state.pendingWheelSpin && !wheelOverlay) {
+      setWheelOverlay({ playerId: state.pendingWheelSpin.playerId, segmentIndex: null, phase: "enter" });
+      // Mount in the shrunken/faded `enter` pose, then flip to `idle` on the
+      // next frame so the fade/scale-in transition actually has something to
+      // animate from — flipping in the same tick would let the browser
+      // coalesce both states and skip the animation (see `CardPlayOverlay`'s
+      // identical "start" -> "grow" two-step for the same reason).
+      requestAnimationFrame(() => setWheelOverlay((w) => (w && w.phase === "enter" ? { ...w, phase: "idle" } : w)));
+    }
+  }, [state.pendingWheelSpin, wheelOverlay]);
   const awaitingPlayRef = useRef<AwaitingPlay | null>(null);
   // Every tile a just-played row/column-trap card will drop (the whole
   // row/column, not just tiles a player happens to stand on) — computed in
@@ -2347,6 +2770,34 @@ export default function GameUI({
           } else {
             void applyRemoteCardPlay(msg.moves, msg.state, fireLandEffects);
           }
+        } else if (msg.event === "wheel_spun") {
+          setWheelOverlay((w) => (w ? { ...w, segmentIndex: msg.segmentIndex } : w));
+          // A "drop" outcome is exactly a row-trap card played from the
+          // mover's own tile (see `applyWheelOutcome`'s "drop" case) — figure
+          // out which row (from the pre-drop state) now, but hold off
+          // actually building the trapdoors until the wheel's fully hidden
+          // (below), or they'd visibly appear on the board while the wheel is
+          // still up.
+          const dropTileIds =
+            msg.outcome === "drop" ? trapCardTileIds(stateRef.current, msg.playerId, "row") : null;
+          void (async () => {
+            // Let the spin finish, then hold on the landed segment for a
+            // celebratory beat before reversing the enter animation to hide
+            // the wheel — only then do the board moves/state actually land,
+            // so the reveal always happens after the wheel's gone.
+            await sleep(WHEEL_SPIN_MS);
+            setWheelOverlay((w) => (w ? { ...w, phase: "celebrate" } : w));
+            await sleep(WHEEL_CELEBRATE_MS);
+            setWheelOverlay((w) => (w ? { ...w, phase: "exit" } : w));
+            await sleep(WHEEL_EXIT_MS);
+            setWheelOverlay(null);
+            if (dropTileIds) {
+              sceneHandleRef.current?.prepareTrapdoorDrop(dropTileIds);
+              sceneHandleRef.current?.openTrapdoors(dropTileIds);
+            }
+            await Promise.all(msg.moves.map((m) => sceneHandleRef.current?.animateMove(m.playerId, m.path)));
+            setState(msg.state);
+          })();
         } else if (msg.event === "offer_updated") {
           setState(msg.state);
         } else if (msg.event === "dev_state_set") {
@@ -2359,8 +2810,13 @@ export default function GameUI({
     [subscribe],
   );
 
+  const handleSpinWheel = () => {
+    if (!wheelOverlay || wheelOverlay.segmentIndex !== null || !controlledPlayerIds.includes(wheelOverlay.playerId)) return;
+    send({ action: "spin_wheel" });
+  };
+
   const handlePlayCard = async (card: Card, buttonEl: HTMLButtonElement) => {
-    if (playing || state.status !== "idle" || state.cardOffer || !isMyTurn) return;
+    if (playing || state.status !== "idle" || state.cardOffer || state.pendingWheelSpin || !isMyTurn) return;
     setPlaying(true);
 
     const rect = buttonEl.getBoundingClientRect();
@@ -2549,7 +3005,7 @@ export default function GameUI({
               <HandBaseline />
               {myPlayer.hand.map((card, i) => {
                 const isAnimating = cardAnim?.card.id === card.id;
-                const locked = playing || !!state.cardOffer || !isMyTurn;
+                const locked = playing || !!state.cardOffer || !!state.pendingWheelSpin || !isMyTurn;
                 const color = cardColor(card, locked);
                 const mid = (myPlayer.hand.length - 1) / 2;
                 const offset = i - mid;
@@ -2611,7 +3067,7 @@ export default function GameUI({
       )}
       {state.cardOffer && deckAnchor && controlledPlayerIds.includes(state.cardOffer.playerId) && (
         <CardOfferFan
-          key={state.cardOffer.offered.map((c) => c.id).join(",")}
+          key={offerSessionKeyRef.current ?? undefined}
           offer={state.cardOffer}
           offeringPlayerName={state.players.find((p) => p.id === state.cardOffer!.playerId)?.name ?? "Player"}
           anchor={deckAnchor}
@@ -2622,6 +3078,15 @@ export default function GameUI({
         />
       )}
       {burst && <ParticleBurst burst={burst} />}
+      {wheelOverlay && (
+        <SpinWheelOverlay
+          moverName={state.players.find((p) => p.id === wheelOverlay.playerId)?.name ?? "Player"}
+          isController={controlledPlayerIds.includes(wheelOverlay.playerId)}
+          spinning={wheelOverlay.segmentIndex !== null ? { segmentIndex: wheelOverlay.segmentIndex } : null}
+          phase={wheelOverlay.phase}
+          onSpin={handleSpinWheel}
+        />
+      )}
       <style>{`
         .hud-layer[data-power="off"] {
           filter: grayscale(1) brightness(0.35) contrast(0.9);
@@ -2747,6 +3212,10 @@ export default function GameUI({
           20% { opacity: 1; transform: translateY(-6px) scale(1.25); }
           35% { opacity: 1; transform: translateY(-10px) scale(1); }
           100% { opacity: 0; transform: translateY(-34px) scale(1); }
+        }
+        @keyframes wheel-celebrate-glow {
+          0%, 100% { filter: drop-shadow(0 0 26px rgba(34,227,255,0.35)); }
+          50% { filter: drop-shadow(0 0 50px rgba(255,242,158,0.9)); }
         }
         @keyframes damage-shake {
           0% { transform: translate(0, 0); }

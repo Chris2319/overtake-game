@@ -303,6 +303,7 @@ const STAIR_COLOR = 0x22e3ff;
 const TRAPDOOR_COLOR = 0xff2d95;
 const ABILITY_COLOR = 0xe6ff2e;
 const DAMAGE_COLOR = 0xff5a1f;
+const SPECIAL_COLOR = 0x2ecc40;
 /** A "freeze" card play turns whatever tile the mover was standing on into a
  * standing hazard (see `GameState.frozenTiles`) — any ordinary tile's
  * outline brightens to this color while it's active, without changing
@@ -753,7 +754,8 @@ export default function Scene({ state, handleRef, onOrbitModeChange }: SceneProp
 
       const isAbility = tile.effect.type === "ability";
       const isDamage = tile.effect.type === "damage";
-      const color = isAbility ? ABILITY_COLOR : isDamage ? DAMAGE_COLOR : TILE_COLOR;
+      const isSpecial = tile.effect.type === "special";
+      const color = isAbility ? ABILITY_COLOR : isDamage ? DAMAGE_COLOR : isSpecial ? SPECIAL_COLOR : TILE_COLOR;
 
       const isTrapdoor = tile.effect.type === "trapdoor";
       const tileGeometry = new THREE.BoxGeometry(CELL * 0.92, TILE_HEIGHT, CELL * 0.92);
@@ -777,9 +779,11 @@ export default function Scene({ state, handleRef, onOrbitModeChange }: SceneProp
           ? ABILITY_COLOR
           : isDamage
             ? DAMAGE_COLOR
-            : tile.col % 2 === 0
-              ? TILE_FLASH_COLOR_A
-              : TILE_FLASH_COLOR_B,
+            : isSpecial
+              ? SPECIAL_COLOR
+              : tile.col % 2 === 0
+                ? TILE_FLASH_COLOR_A
+                : TILE_FLASH_COLOR_B,
       );
       scene.add(mesh);
       tileMeshes.set(tile.id, mesh);

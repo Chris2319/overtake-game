@@ -1,5 +1,19 @@
 import { generateBoard, MAIN_LAYER_ID, tileAtPosition, findTile, rowColToPosition } from "./board";
-import type { Card, CardId, CardOffer, GameState, MoveResult, MoveStep, Player, PlayerId, Team, TeamId, Tile, TileId } from "./types";
+import type {
+  Card,
+  CardId,
+  CardOffer,
+  GameState,
+  MoveResult,
+  MoveStep,
+  Player,
+  PlayerId,
+  Team,
+  TeamId,
+  Tile,
+  TileId,
+  WheelOutcomeType,
+} from "./types";
 
 /** The five team color identities available today. Order also picks the
  * default team for a config that doesn't specify a color. */
@@ -58,6 +72,42 @@ const COLUMN_TRAP_COPIES = 2;
 const FREEZE_VALUE = 1;
 /** As rare as a team-advance/team-retreat card. */
 const FREEZE_COPIES = 4;
+
+/** The Fortune Wheel's 8 wedges, in the fixed order every client renders the
+ * wheel in — `segmentIndex` (see `WsServerEvent`'s `wheel_spun`) indexes into
+ * this same array, so the server's random pick and the client's spin
+ * animation always agree on which wedge is which. Only "wildcard" rolls a
+ * further random magnitude (see `WHEEL_WILDCARD_MIN`/`MAX`) — every other
+ * outcome's effect is a fixed amount; the wedge the spin lands on is the
+ * only randomness those need. `weight` sizes a wedge's slice of the wheel
+ * (relative to the others, default 1) *and* its odds of being landed on —
+ * both the client's wedge geometry and `rollWheelSegment` read off the same
+ * number, so a smaller slice is always a rarer one, never just a visual lie.
+ * Order also alternates each wedge's color (see `wheelSegmentColor` in
+ * GameUI.tsx: setbacks — "retreat"/"drop" — are magenta, everything else
+ * blue, "wildcard" gold) blue/magenta/blue/magenta around the wheel, with
+ * "wildcard" as the one odd-color-out at the end. "advance"/"retreat" each
+ * appear twice (same fixed magnitude both times) rather than there being a
+ * separate whole-team version of either. */
+export const WHEEL_SEGMENTS: { type: WheelOutcomeType; label: string; weight?: number }[] = [
+  { type: "advance", label: "+3" },
+  { type: "retreat", label: "-2" },
+  { type: "freeze", label: "FREEZE" },
+  { type: "retreat", label: "-2" },
+  { type: "swap", label: "SWAP" },
+  { type: "drop", label: "DROP" },
+  { type: "advance", label: "+3" },
+  { type: "wildcard", label: "WILD", weight: 0.5 },
+];
+
+/** Tiles an "advance" wheel outcome moves the mover forward. */
+const WHEEL_ADVANCE_VALUE = 3;
+/** Tiles a "retreat" wheel outcome moves the mover backward. */
+const WHEEL_RETREAT_VALUE = -2;
+/** Range (inclusive) a "wildcard" wheel outcome randomly picks its forward
+ * move magnitude from. */
+const WHEEL_WILDCARD_MIN = 5;
+const WHEEL_WILDCARD_MAX = 20;
 
 export interface PlayerConfig {
   id: PlayerId;
@@ -140,7 +190,24 @@ function drawCards(
   return { drawn, drawPile: pile, discardPile: discard };
 }
 
-export function createInitialState(teamConfigs: TeamConfig[]): GameState {
+/** The fixed starting hand QA mode deals every seat instead of a random
+ * draw: one each of a small +1/+2/+3/freeze/team-retreat kit, so every
+ * special card type is immediately available to test without waiting on
+ * the deck. */
+function createQaFixedHand(): Card[] {
+  return [
+    { id: `card-${cardIdCounter++}`, type: "move", value: 1 },
+    { id: `card-${cardIdCounter++}`, type: "move", value: 2 },
+    { id: `card-${cardIdCounter++}`, type: "move", value: 3 },
+    { id: `card-${cardIdCounter++}`, type: "freeze", value: FREEZE_VALUE },
+    { id: `card-${cardIdCounter++}`, type: "team-retreat", value: TEAM_RETREAT_VALUE },
+  ];
+}
+
+export function createInitialState(
+  teamConfigs: TeamConfig[],
+  options: { fixedHand?: boolean } = {},
+): GameState {
   const { layers, tiles, abilities } = generateBoard();
   const startTile = tileAtPosition(tiles, MAIN_LAYER_ID, 1);
 
@@ -156,9 +223,15 @@ export function createInitialState(teamConfigs: TeamConfig[]): GameState {
   const playersByTeam: Player[][] = teamConfigs.map((config, i) => {
     const team = teams[i];
     return config.players.map((playerConfig) => {
-      const dealt = drawCards(drawPile, discardPile, HAND_SIZE);
-      drawPile = dealt.drawPile;
-      discardPile = dealt.discardPile;
+      let hand: Card[];
+      if (options.fixedHand) {
+        hand = createQaFixedHand();
+      } else {
+        const dealt = drawCards(drawPile, discardPile, HAND_SIZE);
+        drawPile = dealt.drawPile;
+        discardPile = dealt.discardPile;
+        hand = dealt.drawn;
+      }
 
       return {
         id: playerConfig.id,
@@ -167,7 +240,7 @@ export function createInitialState(teamConfigs: TeamConfig[]): GameState {
         color: team.color,
         currentTileId: startTile.id,
         abilities: [],
-        hand: dealt.drawn,
+        hand,
         frozenTileId: null,
         frozenSkipPending: false,
       };
@@ -201,6 +274,7 @@ export function createInitialState(teamConfigs: TeamConfig[]): GameState {
     winnerId: null,
     cardOffer: null,
     frozenTiles: [],
+    pendingWheelSpin: null,
   };
 }
 
@@ -544,10 +618,18 @@ function applyDamageToHand(hand: Card[]): Card[] {
   return hand.map((card) => (card.type === "move" ? { ...card, value: card.value - 1 } : card));
 }
 
+/** Options shared by `applyMoveResult`/`applyTeamAdvance`. */
+interface ApplyMoveOptions {
+  /** Keeps the turn on the mover instead of advancing it — used when the
+   * move lands on a "special" tile and a Fortune Wheel spin (see
+   * `GameState.pendingWheelSpin`) still owes the turn's actual resolution. */
+  holdTurn?: boolean;
+}
+
 /** Applies an already-computed move result and advances the turn. Ability
  * tiles are exposed via the returned `abilityId` hook for callers to react
  * to (e.g. grant an extra turn) without the engine needing UI concerns. */
-export function applyMoveResult(state: GameState, result: MoveResult): GameState {
+export function applyMoveResult(state: GameState, result: MoveResult, options: ApplyMoveOptions = {}): GameState {
   const landingTile = findTile(state.tiles, result.finalTileId);
   const grantsExtraTurn =
     landingTile.effect.type === "ability" && landingTile.effect.abilityId === "extra-turn";
@@ -567,15 +649,16 @@ export function applyMoveResult(state: GameState, result: MoveResult): GameState
     ...result.newlyFrozenTileIds.filter((id) => !state.frozenTiles.includes(id)),
   ];
 
-  const { players: rotatedPlayers, index: nextPlayerIndex } = grantsExtraTurn
-    ? { players, index: state.currentPlayerIndex }
-    : advanceTurnIndex(players, state.currentPlayerIndex);
+  const { players: rotatedPlayers, index: nextPlayerIndex } =
+    options.holdTurn || grantsExtraTurn
+      ? { players, index: state.currentPlayerIndex }
+      : advanceTurnIndex(players, state.currentPlayerIndex);
 
   return {
     ...state,
     players: rotatedPlayers,
     currentPlayerIndex: nextPlayerIndex,
-    turnCount: state.turnCount + 1,
+    turnCount: options.holdTurn ? state.turnCount : state.turnCount + 1,
     status: result.wins ? "finished" : "idle",
     winnerId: result.wins ? result.playerId : state.winnerId,
     frozenTiles,
@@ -741,8 +824,9 @@ export function applyCardPlay(
   playerId: PlayerId,
   cardId: CardId,
   result: MoveResult,
+  options: ApplyMoveOptions = {},
 ): GameState {
-  return finalizeCardPlay(state, applyMoveResult(state, result), playerId, cardId);
+  return finalizeCardPlay(state, applyMoveResult(state, result, options), playerId, cardId);
 }
 
 /** Commits a "team-advance" card played by `playerId`: moves every result in
@@ -760,4 +844,86 @@ export function applyTeamAdvanceCardPlay(
     playerId,
     cardId,
   );
+}
+
+/** Picks a random Fortune Wheel wedge, weighted by each segment's `weight`
+ * (default 1) — a smaller wedge (see "wildcard") is proportionally rarer to
+ * land on, not just visually smaller. */
+export function rollWheelSegment(): number {
+  const totalWeight = WHEEL_SEGMENTS.reduce((sum, s) => sum + (s.weight ?? 1), 0);
+  let roll = Math.random() * totalWeight;
+  for (let i = 0; i < WHEEL_SEGMENTS.length; i++) {
+    roll -= WHEEL_SEGMENTS[i].weight ?? 1;
+    if (roll < 0) return i;
+  }
+  return WHEEL_SEGMENTS.length - 1;
+}
+
+/** Advances the turn the same way `applyMoveResult` does, for wheel outcomes
+ * that don't go through a `MoveResult` (swap, or drop when already on row 0). */
+function advanceTurnAfterWheel(state: GameState): GameState {
+  const { players, index } = advanceTurnIndex(state.players, state.currentPlayerIndex);
+  return { ...state, players, currentPlayerIndex: index, turnCount: state.turnCount + 1 };
+}
+
+/** Resolves a Fortune Wheel spin for `playerId` (who must be the player
+ * `GameState.pendingWheelSpin` is holding the turn for): applies
+ * `outcomeType`'s fixed effect, clears the pending spin, and hands the turn
+ * on to the next player. Never re-opens a further wheel spin even if it
+ * happens to land back on a "special" tile — one spin per landing. */
+export function applyWheelOutcome(
+  state: GameState,
+  playerId: PlayerId,
+  outcomeType: WheelOutcomeType,
+): { state: GameState; moves: { playerId: PlayerId; path: MoveStep[] }[] } {
+  const mover = state.players.find((p) => p.id === playerId);
+  if (!mover) throw new Error(`Unknown player id: ${playerId}`);
+
+  const base: GameState = { ...state, pendingWheelSpin: null };
+
+  switch (outcomeType) {
+    case "advance": {
+      const result = computeMove(base, playerId, WHEEL_ADVANCE_VALUE);
+      return { state: applyMoveResult(base, result), moves: [{ playerId, path: result.path }] };
+    }
+    case "retreat": {
+      const result = computeMove(base, playerId, WHEEL_RETREAT_VALUE);
+      return { state: applyMoveResult(base, result), moves: [{ playerId, path: result.path }] };
+    }
+    case "freeze": {
+      const result = computeFreezeCardPlay(base, playerId);
+      return { state: applyMoveResult(base, result), moves: [{ playerId, path: result.path }] };
+    }
+    case "wildcard": {
+      const value = WHEEL_WILDCARD_MIN + Math.floor(Math.random() * (WHEEL_WILDCARD_MAX - WHEEL_WILDCARD_MIN + 1));
+      const result = computeMove(base, playerId, value);
+      return { state: applyMoveResult(base, result), moves: [{ playerId, path: result.path }] };
+    }
+    case "drop": {
+      // Same effect as playing a "row-trap" card from the mover's tile — the
+      // whole row falls one floor, not just the mover, and anyone else
+      // standing in that row falls right along with them.
+      const { results, destroyedFrozenTileIds } = computeRowColumnTrap(base, playerId, "row");
+      return {
+        state: applyTeamAdvance(base, results, destroyedFrozenTileIds),
+        moves: results.map((r) => ({ playerId: r.playerId, path: r.path })),
+      };
+    }
+    case "swap": {
+      const others = base.players.filter((p) => p.id !== playerId);
+      if (others.length === 0) return { state: advanceTurnAfterWheel(base), moves: [] };
+      const target = others[Math.floor(Math.random() * others.length)];
+      const moverTileId = mover.currentTileId;
+      const targetTileId = target.currentTileId;
+      const swapped: GameState = {
+        ...base,
+        players: base.players.map((p) => {
+          if (p.id === playerId) return { ...p, currentTileId: targetTileId };
+          if (p.id === target.id) return { ...p, currentTileId: moverTileId };
+          return p;
+        }),
+      };
+      return { state: advanceTurnAfterWheel(swapped), moves: [] };
+    }
+  }
 }

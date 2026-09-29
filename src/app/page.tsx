@@ -28,13 +28,6 @@ export default function Home() {
   const updateQaPlayer = (index: number, patch: Partial<QaPlayerConfig>) =>
     setQaPlayers((prev) => prev.map((p, i) => (i === index ? { ...p, ...patch } : p)));
 
-  // QA mode is dev/test tooling, not a player-facing feature — keep it out of
-  // the start page unless explicitly opened with `?qa=1`.
-  const [showQaMode, setShowQaMode] = useState(false);
-  useEffect(() => {
-    setShowQaMode(new URLSearchParams(window.location.search).get("qa") === "1");
-  }, []);
-
   // Dev/scripting convenience: `?autocreate=1&name=Alice[&gameId=CODE]` opens
   // straight into a hosted game with no clicks — see launcher script under
   // scripts/. Query string carries over into the /game/[id] route so its own
@@ -89,16 +82,14 @@ export default function Home() {
           onCreateGame={createGame}
           onJoinGame={joinGame}
         />
-        {showQaMode && (
-          <StartQaPanel
-            connected={connected}
-            qaCount={qaCount}
-            onQaCountChange={setQaCount}
-            qaPlayers={qaPlayers}
-            onUpdateQaPlayer={updateQaPlayer}
-            onStartQaGame={startQaGame}
-          />
-        )}
+        <StartQaPanel
+          connected={connected}
+          qaCount={qaCount}
+          onQaCountChange={setQaCount}
+          qaPlayers={qaPlayers}
+          onUpdateQaPlayer={updateQaPlayer}
+          onStartQaGame={startQaGame}
+        />
       </div>
     </div>
   );
