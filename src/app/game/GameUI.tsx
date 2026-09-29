@@ -2130,7 +2130,7 @@ export default function GameUI({
     updateAnchor();
     window.addEventListener("resize", updateAnchor);
     return () => window.removeEventListener("resize", updateAnchor);
-  }, [state?.status]);
+  }, [state?.status, startPhase, state?.cardOffer]);
 
   // Clears selection/resolving state once there's no active offer, covering
   // both "no offer yet" and "an offer just finished resolving".
